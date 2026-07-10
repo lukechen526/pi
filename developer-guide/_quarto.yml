@@ -1,0 +1,43 @@
+project:
+  type: book
+  output-dir: _output
+
+book:
+  title: "Pi Developer Architecture Guide"
+  subtitle: "A source-grounded path from first contribution to extension authoring"
+  author: "Pi maintainers"
+  date: today
+  chapters:
+    - index.md
+    - 01-typescript-for-pi.md
+    - 02-architecture.md
+    - 03-prompt-lifecycle.md
+    - 04-extensions.md
+    - 05-customization-and-workflow.md
+    - 06-sessions-and-context.md
+    - 07-resources-settings-and-trust.md
+    - 08-built-in-tools.md
+    - 09-models-providers-and-auth.md
+    - 10-agent-core.md
+    - 11-tui-and-interactive-mode.md
+    - 12-testing-debugging-and-contribution.md
+    - 13-guided-source-tours.md
+    - 14-extension-event-reference.md
+    - 15-modes-sdk-and-operations.md
+    - 16-failure-and-recovery-reference.md
+    - glossary.md
+
+format:
+  pdf:
+    documentclass: scrreprt
+    classoption: openany
+    geometry:
+      - margin=0.9in
+    colorlinks: true
+    toc: true
+    number-sections: true
+    code-overflow: wrap
+    keep-tex: false
+
+execute:
+  freeze: auto

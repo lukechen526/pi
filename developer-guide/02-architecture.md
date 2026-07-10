@@ -1,0 +1,209 @@
+# Architecture: packages, ownership, and entry points
+
+Pi deliberately separates generic agent machinery from the coding-agent
+application. A useful rule is: move a feature down only when it is genuinely
+useful outside the coding agent. The coding-agent package owns command-line
+behavior, local filesystem tools, project resources, session UX, and the
+extension API; the `agent` package should not learn those policies.
+
+## Dependency direction
+
+```text
+                    packages/coding-agent
+                   /          |          \
+                  v           v           v
+          packages/tui   packages/agent   packages/ai
+                              |
+                              v
+                         packages/ai
+
+packages/orchestrator  --->  packages/coding-agent  (experimental)
+```
+
+The diagram shows the normal architectural direction, not every development
+tool dependency. `coding-agent` integrates all lower layers. `agent` depends
+on the AI message/model contracts. `tui` is independent of the agent and
+provider layers, allowing it to be reused by other terminal applications.
+
+## Repository-level conventions
+
+The root `package.json` defines npm workspaces for `packages/*` and selected
+extension examples. All packages are ESM. The root `tsconfig.json` maps public
+package names back to source files for whole-repository checking. Each package
+has its own `package.json` with public exports and build script.
+
+When developing inside this checkout, import the public package name if you
+are crossing a package boundary. Use a relative `.ts` import only within a
+package. This preserves the boundary that published consumers see.
+
+The normal quality gate after code changes is `npm run check`. Per repository
+rules, do not run `npm run build` or the full test suite merely as a habit;
+use the requested or relevant targeted validation. This guide adds no runtime
+code, so its separate validation is Quarto rendering.
+
+## Component walkthrough
+
+### `packages/tui`: terminal rendering primitives
+
+`packages/tui/src/index.ts` is the public barrel. It exports the `TUI` class,
+the `Component` interface, containers, text/editor/list components, terminal
+abstractions, key parsing, keybindings, autocomplete, and ANSI-aware text
+utilities.
+
+`packages/tui/src/tui.ts` owns the component tree, focus, layout, overlays,
+input routing, and differential rendering. `src/terminal.ts` provides the
+process-terminal boundary. The components under `src/components/` render
+specific UI pieces; `src/keybindings.ts`, `src/keys.ts`, and the editor
+components handle keyboard semantics. This package does not know what a model,
+tool call, session, or extension is.
+
+Use this layer when a change is a general terminal interaction primitive. For a
+Pi-specific chat row, command, or tool renderer, start in coding-agent instead.
+
+### `packages/ai`: a provider-neutral streaming contract
+
+The small public entry point `packages/ai/src/index.ts` exports core types,
+models, authentication utilities, event-stream helpers, TypeBox, and selected
+API option types. It intentionally avoids eagerly importing provider catalogs
+and provider factories. Provider-specific modules live under `src/providers/`
+and streaming implementations under `src/api/`.
+
+The core concepts are defined in `src/types.ts`:
+
+- A `Model` carries provider/API metadata and capabilities.
+- A `Context` combines the system prompt, normalized messages, and tool
+  definitions.
+- An `AssistantMessageEventStream` yields provider-independent start, text,
+  thinking, tool-call, completion, and error events.
+
+`src/compat.ts` supplies the compatibility `streamSimple()` dispatch used on
+the coding-agent path. It chooses a built-in model registry or resolves an API
+provider from `model.api`, then passes a `Context` plus simple stream options
+to that provider. `src/models.ts` exposes a `Models` implementation that owns
+provider registration and routes model requests. Individual files such as
+`src/api/openai-responses.ts` and `src/api/anthropic-messages.ts` serialize
+the normalized context into a provider request and translate that provider's
+stream back into Pi events.
+
+Provider adapters are the right place for protocol-specific JSON, streaming
+parsing, or provider quirks. Do not put a UI decision or a built-in filesystem
+tool in this package.
+
+### `packages/agent`: generic conversation and tool loop
+
+`packages/agent/src/types.ts` declares the generic agent contract: agent
+messages, tools, events, loop configuration, hooks, queue modes, and tool
+execution mode. `src/agent.ts` wraps that loop in the stateful `Agent` class.
+It owns current model, system prompt, tools, messages, active runs, abort
+controllers, and steering/follow-up queues.
+
+`src/agent-loop.ts` is the important execution core. It:
+
+1. Emits agent/turn/message events.
+2. Lets a caller transform agent messages, then converts them to LLM messages.
+3. Builds a provider `Context` and consumes an async response stream.
+4. Validates model-produced tool arguments.
+5. Runs tools sequentially or with sequential preflight plus parallel
+   execution.
+6. Appends tool results and repeats until there are no tool calls or queued
+   messages.
+
+The generic loop deliberately receives callbacks such as `convertToLlm`,
+`transformContext`, `beforeToolCall`, and `afterToolCall`. It therefore has no
+dependency on `SessionManager`, local disk tools, or the interactive TUI.
+
+### `packages/coding-agent`: the Pi application
+
+This is where the generic pieces become the `pi` command. Its package manifest
+defines the `pi` binary as `dist/cli.js`. In source,
+`src/cli.ts` sets process-level behavior and calls `main(process.argv.slice(2))`
+from `src/main.ts`.
+
+`src/main.ts` parses command-line arguments, determines interactive/RPC/print
+mode, resolves trust and settings, creates the runtime, selects the model, and
+starts `InteractiveMode`, RPC mode, or print mode. It is composition and
+application policy, not the agent loop.
+
+The major coding-agent subsystems are:
+
+| Subsystem | Responsibility | Important files |
+|---|---|---|
+| Session composition | Create settings, auth, model registry, resources, agent session | `core/sdk.ts`, `core/agent-session-services.ts` |
+| Runtime replacement | Own a session plus cwd-bound services across new/resume/fork | `core/agent-session-runtime.ts` |
+| Session policy | Prompt preprocessing, resource/system prompt assembly, retries, compaction, extension event bridge | `core/agent-session.ts` |
+| Durable transcript | JSONL session entries, tree branches, context reconstruction | `core/session-manager.ts`, `core/messages.ts` |
+| Resources | Load extensions, skills, prompts, themes, and context files | `core/resource-loader.ts`, `core/extensions/loader.ts` |
+| Configuration | Global/project settings and defaults | `core/settings-manager.ts`, `core/defaults.ts` |
+| Model/auth resolution | Registered models, dynamic providers, credential lookup | `core/model-registry.ts`, `core/auth-storage.ts` |
+| Built-in tools | Read, bash, edit, write, search, file mutation coordination | `core/tools/`, `utils/tools-manager.ts` |
+| Interactive app | Chat transcript, editor, dialogs, commands, renderer adapters | `modes/interactive/interactive-mode.ts`, `modes/interactive/components/` |
+| Extensions | Types, discovery/loading, event dispatch, context wrappers | `core/extensions/types.ts`, `loader.ts`, `runner.ts`, `wrapper.ts` |
+
+The table is an orientation map, not an exhaustive API list. Public
+coding-agent exports come from `src/index.ts`; extension authors should import
+from the package root rather than internal paths unless an API is explicitly
+documented for that purpose.
+
+### `packages/orchestrator`: experimental process orchestration
+
+`packages/orchestrator` depends on coding-agent and exports configuration,
+handlers, IPC client/server/protocol, process supervision, storage, and serve
+functions from `src/index.ts`. Its manifest describes it as experimental.
+Treat it as a separate surface for multi-process orchestration, not as a hidden
+step of normal prompt processing.
+
+## Constructing a running coding-agent session
+
+The startup path is intentionally split so the runtime can be rebuilt when a
+session changes its working directory.
+
+```text
+main.ts
+  -> createAgentSessionRuntime(...)
+      -> createAgentSessionServices(...)
+          SettingsManager + AuthStorage + ModelRegistry + DefaultResourceLoader
+      -> createAgentSessionFromServices(...)
+          -> createAgentSession(...) in core/sdk.ts
+              -> Agent + AgentSession + built-in/custom tool registry
+  -> InteractiveMode | runRpcMode | runPrintMode
+```
+
+`createAgentSessionServices()` reloads the resource loader and applies provider
+registrations that extensions made during their factories. `createAgentSession()`
+then resolves/restores a model and thinking level, creates an `Agent`, and
+wraps it in `AgentSession`. The `AgentSessionRuntime` class tears down the old
+extension/session runtime before applying a newly created one for operations
+such as session resume or fork.
+
+## Persistence and context are different things
+
+Pi sessions are JSONL files managed by `SessionManager`. They are tree-shaped:
+entries have `id` and `parentId`, so a branch can exist in one file. The current
+branch is converted into LLM context by `buildContextEntries()` and related
+helpers in `core/session-manager.ts`.
+
+Not every durable entry reaches the provider. A custom entry written with
+`pi.appendEntry()` persists extension state but does not participate in LLM
+context. A custom message sent with `pi.sendMessage()` does participate. This
+distinction is central to extension design: keep private UI/state metadata out
+of model context unless the model needs it.
+
+Compaction is another context transformation, not deletion. Pi writes a
+summary entry and reconstructs a compact context from the summary and newer
+entries. The generic algorithms are exported by `packages/agent` under
+`src/harness/compaction/`; coding-agent coordinates the user-facing policy and
+session entries.
+
+## Where to make a change
+
+Use the narrowest layer that truthfully owns the behavior:
+
+| Desired change | First place to investigate |
+|---|---|
+| Add a provider/API serializer | `packages/ai/src/api/` and `src/providers/` |
+| Change generic tool scheduling or streaming semantics | `packages/agent/src/agent-loop.ts` |
+| Add keyboard/editor/component capability reusable by TUIs | `packages/tui/src/` |
+| Change Pi commands, session behavior, built-in tool policy, settings | `packages/coding-agent/src/` |
+| Add user/team behavior without forking Pi | Extension, skill, theme, prompt, settings, or package |
+
+The next chapter traces this layering one prompt at a time.
