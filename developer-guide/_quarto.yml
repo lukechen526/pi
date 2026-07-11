@@ -8,24 +8,24 @@ book:
   author: "Pi maintainers"
   date: today
   chapters:
-    - index.md
-    - 01-typescript-for-pi.md
-    - 02-architecture.md
-    - 03-prompt-lifecycle.md
-    - 04-extensions.md
-    - 05-customization-and-workflow.md
-    - 06-sessions-and-context.md
-    - 07-resources-settings-and-trust.md
-    - 08-built-in-tools.md
-    - 09-models-providers-and-auth.md
-    - 10-agent-core.md
-    - 11-tui-and-interactive-mode.md
-    - 12-testing-debugging-and-contribution.md
-    - 13-guided-source-tours.md
-    - 14-extension-event-reference.md
-    - 15-modes-sdk-and-operations.md
-    - 16-failure-and-recovery-reference.md
-    - glossary.md
+    - index.qmd
+    - 01-typescript-for-pi.qmd
+    - 02-architecture.qmd
+    - 03-prompt-lifecycle.qmd
+    - 04-extensions.qmd
+    - 05-customization-and-workflow.qmd
+    - 06-sessions-and-context.qmd
+    - 07-resources-settings-and-trust.qmd
+    - 08-built-in-tools.qmd
+    - 09-models-providers-and-auth.qmd
+    - 10-agent-core.qmd
+    - 11-tui-and-interactive-mode.qmd
+    - 12-testing-debugging-and-contribution.qmd
+    - 13-guided-source-tours.qmd
+    - 14-extension-event-reference.qmd
+    - 15-modes-sdk-and-operations.qmd
+    - 16-failure-and-recovery-reference.qmd
+    - glossary.qmd
 
 format:
   pdf:

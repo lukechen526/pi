@@ -1,4 +1,4 @@
-# Sessions, branches, and durable context
+# Sessions, branches, and durable context {#sec:sessions}
 
 Pi does not treat a chat as a flat array that is overwritten on every new
 turn. The coding agent persists an append-only JSONL session tree and rebuilds
@@ -6,7 +6,11 @@ the current conversation from a selected leaf. That design supports resume,
 fork, branch navigation, compaction, labels, and extension state without
 requiring a database.
 
-This chapter is grounded in `packages/coding-agent/src/core/session-manager.ts`,
+This chapter is for extension authors, embedders, and contributors debugging
+resume, branching, or context selection. If you only use Pi interactively, the
+branching and compaction sections explain the behavior you will observe.
+
+It is grounded in `packages/coding-agent/src/core/session-manager.ts`,
 `packages/coding-agent/src/core/messages.ts`,
 `packages/coding-agent/src/core/agent-session-runtime.ts`, and
 `packages/coding-agent/docs/session-format.md`.
@@ -19,38 +23,69 @@ path or duplicates a large prefix into another file. Pi instead stores entries
 with an `id` and `parentId`. One file can represent both paths.
 
 ```text
-header (not a tree node)
-  |
-  +-- user: "Investigate auth"
-        |
-        +-- assistant: plan A
-              |
-              +-- tool result: read auth.ts
-                    |
-                    +-- user: "Implement A"              <- old leaf
-                    |
-                    +-- branch summary: "A explored ..."
-                          |
-                          +-- user: "Try plan B instead" <- current leaf
+Session file:
+  header  (metadata only: type=session, version, id, cwd, optional parentSession)
+          # not a tree node; has no parentId and is never selected as a leaf
+
+Entry tree (linked only by entry parentId values):
+  user: "Investigate auth"
+    |
+    +-- assistant: plan A
+          |
+          +-- tool result: read auth.ts
+                |
+                +-- user: "Implement A"              <- old leaf
+                |
+                +-- branch_summary: "A explored ..."
+                      |
+                      +-- user: "Try plan B instead" <- current leaf
 ```
+
+`parentSession` on the header records fork provenance across session files. It
+is not a `parentId` edge inside this entry tree.
 
 The active branch is the chain from the current leaf to the root, read in
 chronological order. Other children are not provider context merely because
-they exist on disk. This is a critical distinction when debugging a surprising
-model response: inspect the active path rather than the whole session file.
+they exist on disk. When debugging a surprising model response, inspect that
+active path rather than the whole session file.
 
 ## Files, headers, and locations
 
 By default, coding-agent sessions live under the agent directory, arranged by
-working directory. Each persisted session is a `.jsonl` file. The first line is
-a `session` header with metadata such as a UUID, timestamp, format version,
-and cwd; it has no `id`/`parentId` and is not part of the tree.
+working directory:
 
-The session location can be overridden in settings or by CLI/environment
-configuration. The documented precedence is:
+```text
+~/.pi/agent/sessions/--<encoded-cwd>--/<timestamp>_<uuid>.jsonl
+```
+
+Each persisted session is a `.jsonl` file. Its first line is a file header, for
+example:
+
+```json
+{"type":"session","version":3,"id":"<session-uuid>","timestamp":"<iso-time>","cwd":"/work/project","parentSession":"<optional-source-file>"}
+```
+
+The header's `id` identifies the session, not a node. Unlike every subsequent
+entry, the header has no `parentId` and cannot be selected as the active leaf.
+`version` controls format migration, `timestamp` and `cwd` describe where the
+session began, and optional `parentSession` records fork provenance only.
+
+Session storage and other options are ordinary nested keys in settings JSON,
+not filesystem path conventions. Global settings live in
+`~/.pi/agent/settings.json`; project settings live in `.pi/settings.json` and
+override the global file for the same keys. Nested objects merge, so a project
+can set only the fields it needs.
+
+Override the session directory with:
 
 ```text
 --session-dir  >  PI_CODING_AGENT_SESSION_DIR  >  settings.json sessionDir
+```
+
+`sessionDir` accepts absolute or relative paths and expands `~`. Example:
+
+```json
+{ "sessionDir": ".pi/sessions" }
 ```
 
 Use `SessionManager.inMemory(cwd?)` when embedding Pi where persistence is not
@@ -75,13 +110,13 @@ context through `buildSessionContext()`.
 | `label` | Named marker attached to an entry | No |
 | `session_info` | User-visible session name | No |
 
-This table yields a simple rule for extension authors: use `custom` for state
-that Pi or the user needs, and use `custom_message`/`pi.sendMessage()` only
-when the model should receive it.
+Extension authors should follow one rule from this table: use `custom` for
+state that Pi or the user needs, and use `custom_message`/`pi.sendMessage()`
+only when the model should receive it.
 
 ## Message shapes at the provider boundary
 
-The `message` entry wraps an `AgentMessage`. The core roles are:
+The `message` entry wraps an `AgentMessage`. Core roles are:
 
 ```text
 user          user text and optional images
@@ -103,7 +138,7 @@ similarly named tool.
 ## `SessionManager` as the persistence boundary
 
 The class exposes both static constructors/listing methods and instance
-methods. The most useful API groupings are:
+methods. Useful API groupings:
 
 | Intent | Methods |
 |---|---|
@@ -122,7 +157,7 @@ or compaction semantics and may become inconsistent with the transcript.
 ## Building context from a selected leaf
 
 `buildContextEntries()` is the intermediate view used by the interactive
-transcript and session context construction. At a high level it does this:
+transcript and session context construction. At a high level:
 
 ```text
 all persisted entries
@@ -140,45 +175,38 @@ apply the latest effective compaction boundary
 context entries for rendering and conversion
 ```
 
-When there is no compaction, the active path is the selected context. With a
-compaction entry, Pi retains the compaction summary and only the entries from
-that entry's `firstKeptEntryId` onward, plus later entries. It does not throw
-away the earlier raw records; they remain in the JSONL file for tree history,
-but they are intentionally not sent to the LLM.
+Without compaction, that active path is the selected context. After compaction,
+Pi substitutes the summary for the older span and keeps entries beginning at
+`firstKeptEntryId`. Replaced records remain in JSONL for history but are not
+sent to the LLM.
 
-`buildSessionContext()` goes a step further. It scans the full path to restore
-the current model and thinking level, then maps selected entries to context
-messages. Custom entries are omitted. This is why storing a private extension
-cache in `appendEntry()` does not inflate context length.
+`buildSessionContext()` also scans the full path to restore the current model
+and thinking level, then converts selected entries to messages. It omits
+`custom` entries, so private extension state added with `pi.appendEntry()` does
+not consume provider context.
 
 ## Compaction is a controlled replacement of old context
 
-Context windows are finite. Pi's automatic compaction condition is conceptually:
+Context windows are finite. Auto-compaction triggers when:
 
 ```text
 estimated context tokens > model context window - reserveTokens
 ```
 
-The default reserve is 16,384 tokens and the default recent-history target is
-20,000 tokens, both configurable under `compaction` in settings. The exact
-token calculation and cut-point behavior are implemented in the agent
-harness; coding-agent coordinates the session operation, extension events, UI,
-and retry behavior.
+Defaults are `compaction.reserveTokens: 16384` and
+`compaction.keepRecentTokens: 20000`, configurable under the `compaction`
+object in global or project settings. Exact token calculation and cut-point
+behavior live in the agent harness; coding-agent coordinates the session
+operation, extension events, UI, and retry behavior.
 
-The standard flow is:
+Pi chooses a valid cut near the recent-history target, summarizes the older
+span (including a prior summary when present), appends a `compaction` entry,
+and rebuilds context from that summary plus the retained entries. Tool-call and
+tool-result relationships constrain where the cut may land. Raw history stays
+on disk; only provider context is replaced.
 
-1. Locate a valid cut point near the recent-history token target.
-2. Collect the older messages to summarize, keeping tool-result relationships
-   valid.
-3. Ask a model for a structured summary, including previous-summary context
-   when necessary.
-4. Append a compaction entry with summary, token count, and first kept entry.
-5. Rebuild the session context from the summary plus retained recent entries.
-
-Compaction is not the same as deleting history. Its purpose is to preserve an
-actionable description of old work while freeing provider context. An extension
-can intercept `session_before_compact` to cancel or provide a custom summary,
-and observes the final result through `session_compact`.
+An extension can intercept `session_before_compact` to cancel compaction or
+provide a custom summary, then observe the result through `session_compact`.
 
 ### Split turns and tool continuity
 
@@ -188,54 +216,82 @@ the next user message. Pi avoids cutting between an assistant tool call and
 its tool result because that would make the remaining context internally
 incoherent for the provider.
 
-An exceptionally large turn can exceed the recent-history budget by itself.
-The compaction design has a split-turn path that summarizes the early prefix
-and preserves the later portion. This is why an extension should not assume
-compaction always removes only whole, old user turns.
+If one turn exceeds `compaction.keepRecentTokens`, Pi may split it at an
+assistant message, never at a tool result. For example:
+
+```text
+summarized turn prefix                  retained suffix
+user -> assistant(tool A) -> result A | assistant(tool B) -> result B
+                                        ^ firstKeptEntryId
+                                        ^ isSplitTurn === true
+
+session_before_compact.preparation:
+  turnPrefixMessages   = [user, assistant(tool A), result A]
+  messagesToSummarize  = earlier complete turns (if any)
+  isSplitTurn          = true
+```
+
+Pi separately summarizes any older complete turns and the early prefix of this
+large turn, then merges those summaries. Here the retained suffix begins at
+`assistant(tool B)`, so tool call B remains beside result B. Extensions must
+handle both `turnPrefixMessages` and `messagesToSummarize` rather than assuming
+that compaction removes only whole user turns.
 
 ## Branch navigation and branch summaries
 
-`/tree` changes the leaf to a different entry. The old branch may contain work
-that is relevant to the new branch but is no longer on its parent chain. Pi can
-summarize that abandoned path and append a `branch_summary` at the navigation
-point. That summary becomes context on the new path.
+`/tree` changes the leaf to a different entry. Work on the old branch may still
+matter for the new branch even though it is no longer on the parent chain. Pi
+can summarize that abandoned path and append a `branch_summary` at the
+navigation point so the new path keeps a concise account without replaying all
+old messages.
 
 ```text
 old path:    common ancestor -> A -> B -> C
 new target:  common ancestor -> D -> E
 
-optional summary of A/B/C is appended near E so the new conversation has
-a concise account of the abandoned work without replaying all old messages.
+optional summary of A/B/C is appended near E
 ```
 
-`branchSummary.reserveTokens` controls the summarizer's response reserve.
-`branchSummary.skipPrompt` controls whether the interactive UI asks before
-making a summary. Extensions can provide/cancel summaries with
-`session_before_tree` and observe them with `session_tree`.
+Configure this under `branchSummary` (same settings files as above):
 
-## Session replacement is not a mutation of the old runtime
+```json
+{
+  "branchSummary": {
+    "reserveTokens": 16384,
+    "skipPrompt": false
+  }
+}
+```
 
-New/resume/fork flows use `AgentSessionRuntime`. It owns both the current
-`AgentSession` and cwd-bound services such as settings, resources, models, and
-auth. A replacement flow deliberately tears down the old runtime and creates a
-new one for the destination session.
+`reserveTokens` reserves response space for the summarizer. With the default
+`skipPrompt: false`, `/tree` asks whether to summarize; `true` suppresses that
+question and defaults to no summary. Extensions can provide or cancel a
+summary with `session_before_tree` and observe the result with `session_tree`.
+
+## Session replacement tears down the old runtime
+
+New, resume, and fork flows go through `AgentSessionRuntime`. That object owns
+the current `AgentSession` and cwd-bound services such as settings, resources,
+models, and auth. Replacement deliberately tears the old runtime down and
+builds a new one for the destination session; it does not mutate the previous
+session object into a new identity.
 
 ```text
-request /resume or extension command
-  -> session_before_switch (may cancel)
-  -> session_shutdown on old extension runtime
+request /resume, /new, /fork, or the matching extension command
+  -> session_before_switch or session_before_fork (may cancel)
+  -> session_shutdown on the old extension runtime
   -> old AgentSession disposed
-  -> services/session created for target cwd
-  -> extension runtime rebound
+  -> services and AgentSession created for the target cwd/session
   -> session_start on the new extension instance
-  -> optional withSession callback receives fresh context
+  -> host rebinds UI/extension runtime to the new session
+  -> optional withSession callback receives a fresh context
 ```
 
-An extension command can call `ctx.newSession`, `ctx.switchSession`, or
-`ctx.fork`. Its `withSession` callback receives a fresh replacement context.
-Captured old `pi`, command context, or `SessionManager` objects are stale after
-the replacement and must not be reused. Capture plain strings/IDs before the
-switch, then use only the callback context for session-bound operations.
+Extension commands call `ctx.newSession`, `ctx.switchSession`, or `ctx.fork`.
+Any `withSession` callback receives a fresh replacement context. Captured
+pre-switch `pi`, command context, or `SessionManager` objects are stale after
+replacement and must not be reused. Capture plain strings or IDs before the
+switch, then use only the callback context for session-bound work.
 
 ## Session names, labels, and human navigation
 
@@ -246,7 +302,7 @@ appear in tree navigation. They are lightweight metadata: setting a label does
 not edit a historic message or change model context.
 
 Use labels for checkpoints, handoff points, and experiment names. Use a session
-name for the overall task. This division makes a large session tree easier to
+name for the overall task. That division makes a large session tree easier to
 scan without placing extra prose in provider context.
 
 ## Extension persistence patterns
@@ -270,9 +326,12 @@ pi.on("session_start", (_event, ctx) => {
 ### Private durable data
 
 Use `pi.appendEntry("my-extension", data)` when the model does not need the
-state. On next `session_start`, scan `getEntries()` or the branch for custom
-entries with that `customType`. Register an entry renderer if users should see
-the data in the transcript.
+state. That API delegates to the active session's
+`SessionManager.appendCustomEntry(customType, data)`, which appends a `custom`
+node as a child of the current leaf and advances the leaf. On the next
+`session_start`, scan `getEntries()` or the active branch for entries with that
+`customType`. Register an entry renderer if users should see the data in the
+transcript.
 
 ### Persistent model context
 

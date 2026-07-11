@@ -1,4 +1,4 @@
-# Architecture: packages, ownership, and entry points
+# Architecture: packages, ownership, and entry points {#sec:architecture}
 
 Pi deliberately separates generic agent machinery from the coding-agent
 application. A useful rule is: move a feature down only when it is genuinely
@@ -9,28 +9,28 @@ extension API; the `agent` package should not learn those policies.
 ## Dependency direction
 
 ```text
-                    packages/coding-agent
-                   /          |          \
-                  v           v           v
-          packages/tui   packages/agent   packages/ai
-                              |
-                              v
-                         packages/ai
-
-packages/orchestrator  --->  packages/coding-agent  (experimental)
+Dependent package                         -> Direct runtime dependency
+packages/orchestrator (experimental)      -> packages/coding-agent
+packages/coding-agent                     -> packages/tui
+packages/coding-agent                     -> packages/agent
+packages/coding-agent                     -> packages/ai
+packages/agent                            -> packages/ai
 ```
 
-The diagram shows the normal architectural direction, not every development
-tool dependency. `coding-agent` integrates all lower layers. `agent` depends
-on the AI message/model contracts. `tui` is independent of the agent and
-provider layers, allowing it to be reused by other terminal applications.
+Each arrow points from the package that imports and depends on another package
+to that dependency. The list shows the normal architectural direction, not
+every development-tool dependency. `coding-agent` integrates all lower layers
+and depends directly on each of them; `agent` also depends on the AI
+message/model contracts. `tui` has no dependencies on other packages in this
+monorepo, allowing it to be reused by other terminal applications.
 
 ## Repository-level conventions
 
 The root `package.json` defines npm workspaces for `packages/*` and selected
 extension examples. All packages are ESM. The root `tsconfig.json` maps public
 package names back to source files for whole-repository checking. Each package
-has its own `package.json` with public exports and build script.
+has its own `package.json` with public exports and build script. Release
+versioning is lockstep: all packages share one version and release together.
 
 When developing inside this checkout, import the public package name if you
 are crossing a package boundary. Use a relative `.ts` import only within a
@@ -38,8 +38,9 @@ package. This preserves the boundary that published consumers see.
 
 The normal quality gate after code changes is `npm run check`. Per repository
 rules, do not run `npm run build` or the full test suite merely as a habit;
-use the requested or relevant targeted validation. This guide adds no runtime
-code, so its separate validation is Quarto rendering.
+use the requested or relevant targeted validation. To validate a change
+confined to `developer-guide/`, run `quarto render developer-guide` from the
+repository root; `npm run check` does not render this book.
 
 ## Component walkthrough
 
@@ -124,7 +125,8 @@ mode, resolves trust and settings, creates the runtime, selects the model, and
 starts `InteractiveMode`, RPC mode, or print mode. It is composition and
 application policy, not the agent loop.
 
-The major coding-agent subsystems are:
+The major coding-agent subsystems are listed below. Every path in the
+**Important files** column is relative to `packages/coding-agent/src/`.
 
 | Subsystem | Responsibility | Important files |
 |---|---|---|
@@ -137,9 +139,11 @@ The major coding-agent subsystems are:
 | Model/auth resolution | Registered models, dynamic providers, credential lookup | `core/model-registry.ts`, `core/auth-storage.ts` |
 | Built-in tools | Read, bash, edit, write, search, file mutation coordination | `core/tools/`, `utils/tools-manager.ts` |
 | Interactive app | Chat transcript, editor, dialogs, commands, renderer adapters | `modes/interactive/interactive-mode.ts`, `modes/interactive/components/` |
-| Extensions | Types, discovery/loading, event dispatch, context wrappers | `core/extensions/types.ts`, `loader.ts`, `runner.ts`, `wrapper.ts` |
+| Extensions | Types, discovery/loading, event dispatch, context wrappers | `core/extensions/types.ts`, `core/extensions/loader.ts`, `core/extensions/runner.ts`, `core/extensions/wrapper.ts` |
 
-The table is an orientation map, not an exhaustive API list. Public
+The table is an orientation map, not an exhaustive API list. To navigate it,
+start with the subsystem matching the behavior you are changing, then follow
+its named entry file before reading neighboring implementation files. Public
 coding-agent exports come from `src/index.ts`; extension authors should import
 from the package root rather than internal paths unless an API is explicitly
 documented for that purpose.
@@ -182,17 +186,21 @@ entries have `id` and `parentId`, so a branch can exist in one file. The current
 branch is converted into LLM context by `buildContextEntries()` and related
 helpers in `core/session-manager.ts`.
 
-Not every durable entry reaches the provider. A custom entry written with
-`pi.appendEntry()` persists extension state but does not participate in LLM
-context. A custom message sent with `pi.sendMessage()` does participate. This
-distinction is central to extension design: keep private UI/state metadata out
-of model context unless the model needs it.
+The extension API exposes two methods relevant to this boundary.
+`pi.appendEntry(customType, data)` appends a custom session entry for durable
+extension state. `pi.sendMessage(message, options)` inserts a custom
+conversation message and can optionally trigger or queue model work.
+
+Not every durable entry reaches the provider. An entry written with
+`pi.appendEntry()` does not participate in LLM context, while a message sent
+with `pi.sendMessage()` does. This distinction is central to extension design:
+keep private UI/state metadata out of model context unless the model needs it.
 
 Compaction is another context transformation, not deletion. Pi writes a
 summary entry and reconstructs a compact context from the summary and newer
-entries. The generic algorithms are exported by `packages/agent` under
-`src/harness/compaction/`; coding-agent coordinates the user-facing policy and
-session entries.
+entries. The generic algorithms are exported from
+`packages/agent/src/harness/compaction/`; coding-agent coordinates the
+user-facing policy and session entries.
 
 ## Where to make a change
 
@@ -206,4 +214,6 @@ Use the narrowest layer that truthfully owns the behavior:
 | Change Pi commands, session behavior, built-in tool policy, settings | `packages/coding-agent/src/` |
 | Add user/team behavior without forking Pi | Extension, skill, theme, prompt, settings, or package |
 
-The next chapter traces this layering one prompt at a time.
+Continue to [Prompt lifecycle](#sec:prompt-lifecycle) for a source-level trace
+of how these package boundaries cooperate from interactive input through model
+streaming, tool execution, persistence, and rendering.

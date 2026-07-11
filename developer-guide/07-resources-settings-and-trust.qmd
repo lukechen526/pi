@@ -1,0 +1,329 @@
+# Resources, settings, and project trust {#sec:resources}
+
+Before the first prompt, Pi assembles a runtime from configuration, credentials,
+models, extensions, skills, prompts, themes, and context files. This chapter
+explains that startup surface so you can change configuration intentionally and
+know when a project-local change will be ignored.
+
+Unless otherwise noted, paths in this chapter are relative to
+`packages/coding-agent/`. Primary implementation files are
+`src/core/settings-manager.ts`, `src/core/resource-loader.ts`,
+`src/core/trust-manager.ts`, and `src/core/agent-session-services.ts`. The
+user-facing configuration reference is `docs/settings.md`.
+
+Keep one distinction in view throughout the chapter: an extension is executable
+code, while a skill, prompt, or context file is instruction supplied to the
+model. A package is only a delivery format and may contain either category.
+Choose the least powerful category that solves the problem, and review a
+package according to what it contains rather than treating "package" as a
+separate security mode.
+
+## The startup services boundary
+
+`createAgentSessionServices()` creates the cwd-bound services needed for a
+session:
+
+```text
+cwd + agent directory
+  -> SettingsManager
+  -> AuthStorage
+  -> ModelRegistry
+  -> DefaultResourceLoader
+       -> reload resources subject to trust
+  -> apply pending provider registrations from extension factories
+```
+
+This separation is deliberate. A resumed session can have a different cwd than
+the process's initial cwd, so settings, project resources, and models must be
+created for the effective session cwd. The `AgentSessionRuntime` rebuilds this
+service bundle on a session replacement rather than pretending that settings
+from the old project apply to the new one.
+
+## Global and project settings
+
+Pi reads JSON settings from two conventional scopes:
+
+| File | Scope | Relative resource paths resolve from |
+|---|---|---|
+| `~/.pi/agent/settings.json` | All projects for the current user | `~/.pi/agent` |
+| `.pi/settings.json` | The current project | `.pi` |
+
+Project settings override global settings. Nested objects are merged, so a
+project can adjust only one compaction field while retaining the global
+default for the rest:
+
+```json
+// global
+{ "compaction": { "enabled": true, "reserveTokens": 16384 } }
+
+// project
+{ "compaction": { "reserveTokens": 8192 } }
+```
+
+The effective configuration has `enabled: true` and `reserveTokens: 8192`.
+Use this pattern for small project adjustments rather than copying a full
+settings file that becomes stale as Pi adds defaults.
+
+## Trust is an execution policy, not a cosmetic prompt
+
+Repository-owned settings can select extensions and packages; skills can direct
+the model to run commands. Pi therefore asks for trust before it loads project
+configuration, installs project packages, or executes project extensions.
+
+At interactive startup, Pi looks for trust-requiring inputs and for a saved
+decision covering the current folder or one of its parents. If neither settles
+the question, Pi can prompt. Approval enables `.pi/settings.json`, local
+resources under `.pi`, missing package installation, `.agents/skills`, and
+extension code from those sources. Context instructions such as `AGENTS.md` and
+`CLAUDE.md` are the exception: they load regardless of trust unless context
+loading is disabled.
+
+Pi's noninteractive modes are print mode (`-p` or `--print`), which processes
+the initial prompt and exits; JSON mode (`--mode json`), which writes session
+events as JSON lines; and RPC mode (`--mode rpc`), which exchanges JSONL
+commands and events over standard input and output. None can display the
+startup trust prompt. Without an applicable saved decision, each follows the
+global `defaultProjectTrust` setting:
+
+| Value | Noninteractive behavior without saved decision |
+|---|---|
+| `"ask"` | Ignore project resources because there is no UI prompt |
+| `"never"` | Ignore project resources |
+| `"always"` | Trust project resources |
+
+The CLI flags `--approve`/`-a` and `--no-approve`/`-na` override the decision
+for one run only.
+
+`/trust` immediately writes the selected decision to
+`~/.pi/agent/trust.json`. The command changes persisted state for future Pi
+processes; it does not change the trust decision already resolved by the
+current process. A live `/reload` also keeps that already-resolved trust state,
+so a newly saved `/trust` answer does not start loading (or stop ignoring)
+project resources until Pi itself is restarted. A same-cwd session replacement
+such as `/new` likewise reuses the process-level decision rather than rereading
+`trust.json`.
+
+Before loading repository extensions, Pi emits `project_trust` only to
+user/global and CLI-provided extensions. A handler returns
+`trusted: "yes" | "no" | "undecided"`; the first yes/no response decides the
+outcome. Code awaiting approval therefore cannot approve itself.
+
+## Resource categories
+
+The resource loader assembles several independently useful kinds of content:
+
+| Resource | What it changes | Typical discovery location |
+|---|---|---|
+| Extension | Runtime behavior, tools, commands, UI, providers | `extensions/`, configured paths |
+| Skill | Reusable instruction bundle and optional `/skill:name` command | `skills/`, `.agents/skills` |
+| Prompt template | User-invoked prompt expansion | `prompts/`, configured paths |
+| Theme | Terminal styling data | `themes/`, configured paths |
+| Context file | Instructions added to system-prompt construction | `AGENTS.md` and related loader results |
+| Package | Bundle containing the above | npm/git/local source |
+
+These categories are not interchangeable. A theme changes presentation, while
+skills, prompts, and context files shape model behavior. When instructions are
+enough, do not replace them with an extension that receives the Pi process's
+permissions.
+
+## Explicit resource paths and patterns
+
+The settings keys `extensions`, `skills`, `prompts`, and `themes` accept local
+file paths or directories. Their relative paths use the settings scope shown
+above: the agent directory for global settings and `.pi` for repository
+settings. `packages` instead names npm, git, or local package sources.
+
+Resource arrays and package filters support patterns:
+
+| Syntax | Meaning |
+|---|---|
+| `pattern` | Include matching paths |
+| `!pattern` | Exclude matching paths |
+| `+path` | Force-include an exact path |
+| `-path` | Force-exclude an exact path |
+
+In the object form of a `packages` entry, `pattern` and the exact paths after
+`+` or `-` are relative to that package's root—not to either settings
+directory. For example, `+themes/legacy.json` addresses
+`themes/legacy.json` inside the selected package. Use absolute paths or `~`
+for top-level local resources only when they truly belong to one machine rather
+than to the repository.
+
+## Skills and prompt templates on the input path
+
+`AgentSession.prompt()` gives extension commands first chance to handle slash
+input. It then emits the extension `input` hook. If input is not handled,
+Pi expands skill commands and prompt templates. That means a raw `/skill:name`
+is not necessarily the message sent to the model; it can become the skill's
+content plus user arguments.
+
+`enableSkillCommands` (default `true`) controls interactive registration of
+skills as `/skill:name` slash commands and autocomplete entries. Setting it to
+`false` removes that interactive command surface; it does not unload skills from
+system-prompt construction, and `AgentSession` still expands a submitted
+`/skill:name` prompt into skill content. When debugging prompt content, inspect
+both `ctx.getSystemPromptOptions()` and the actual context event rather than
+searching only the typed text.
+
+## Context files and system-prompt construction {#sec:context-files}
+
+Context discovery first checks the agent directory (normally
+`~/.pi/agent`) for one context file. It then walks from the session cwd through
+every ancestor to the filesystem root and checks each directory. In each
+location it loads only the first existing candidate in this exact order:
+`AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, then `CLAUDE.MD`. Ancestor files are
+ordered from the filesystem root down to the cwd after the global file. Thus a
+cwd-level file does not stop discovery in parent directories, but an
+`AGENTS.md` and `CLAUDE.md` in the same directory are not both loaded.
+`--no-context-files`/`-nc` disables this discovery.
+
+The loader provides loaded context files and skills to `AgentSession`.
+`_rebuildSystemPrompt()` creates structured `BuildSystemPromptOptions` from:
+
+- cwd;
+- selected tool names, snippets, and guidelines;
+- custom/append system-prompt CLI options;
+- loaded skills;
+- loaded context files.
+
+`buildSystemPrompt()` turns those options into provider-independent system
+prompt text. The system prompt is rebuilt when the active tool set changes and
+when session resources reload. Extensions that replace the prompt in
+`before_agent_start` receive the already-built prompt and can chain a change,
+but should avoid discarding these inputs unintentionally.
+
+## Settings that alter runtime behavior
+
+Settings are more than UI preferences. The following groups affect runtime
+semantics and should be considered part of a reproducible project setup.
+
+### Model and thinking
+
+`defaultProvider`, `defaultModel`, `defaultThinkingLevel`,
+`enabledModels`, and `thinkingBudgets` influence startup selection, model
+cycling, and provider options. A saved session model takes precedence during a
+resume if it is still configured and authenticated; defaults are a fallback.
+
+### Compaction and branch summary
+
+`compaction.enabled`, `reserveTokens`, and `keepRecentTokens` determine when
+and how much conversation is summarized. `branchSummary.reserveTokens` and
+`skipPrompt` affect tree navigation. These settings change what reaches a
+provider, so they are not merely transcript retention preferences.
+
+### Retry and delivery
+
+These settings control how long Pi waits after a failure and how queued
+messages are ordered—both matter when reproducing a session. The `retry` block
+separates Pi's agent-level recovery from provider/SDK request retries. Provider
+retries default to zero so a long SDK delay does not silently take control away
+from session-level retry logic.
+
+`steeringMode` and `followUpMode` determine whether each queue drains all
+messages together or one at a time. `transport`, `httpIdleTimeoutMs`, and
+`websocketConnectTimeoutMs` bound provider connection and idle behavior.
+
+### Shell, images, and terminal
+
+`shellPath`, `shellCommandPrefix`, and `npmCommand` affect process execution
+and package management. Image settings control resize/block behavior before a
+provider request. Terminal image and rendering settings affect display but do
+not make an image model-capable; model input capabilities still control whether
+an image can be sent.
+
+## Project configuration that an extension should respect
+
+An extension with its own project-level configuration should:
+
+1. Use `CONFIG_DIR_NAME` from coding-agent rather than hardcoding `.pi`.
+2. Resolve the path relative to `ctx.cwd`.
+3. Call `ctx.isProjectTrusted()` before reading that configuration.
+4. Validate parsed JSON as untrusted data.
+5. Define which state is global, project-local, and session-local.
+
+For example, a global extension may store user preferences in the agent
+directory but read a project allowlist only after trust. That matches Pi's own
+security model and avoids creating an unreviewed bypass.
+
+## Packages are resource delivery, not a new execution mode
+
+Pi packages distribute extensions, skills, prompts, and themes from npm, git,
+or a local path. A package can declare a `pi` manifest in `package.json` or use
+conventional subdirectories. The package manager records sources in the
+`packages` array of the applicable settings file: global sources in
+`~/.pi/agent/settings.json`, and sources installed with `-l` in the project's
+`.pi/settings.json`. The resource loader then finds the declared resources.
+
+Package scope follows settings scope:
+
+- Global managed installs are user-wide and live under the agent directory.
+- Project managed installs are stored under `.pi` and are trust-gated.
+- A local path is loaded in place, so edits affect the next load/reload.
+
+The package commands require the package source for install and removal:
+
+```bash
+pi install <source> [-l]
+pi remove <source> [-l]
+pi list
+pi update --extensions
+```
+
+Here `<source>` is an npm spec, git source, URL, or local path such as
+`npm:@foo/pi-tools`, `git:github.com/user/repo`, or `./local-package`.
+
+`pi update --extensions` is the packages-only update target. CLI help defines
+it as "Update installed packages only": it updates package content from global
+settings and, when project trust applies, project settings, without updating
+the Pi CLI. Despite the historical flag name, it is not limited to extension
+files inside packages; skills, prompts, and themes shipped by those packages are
+updated too. Unpinned npm sources move to the version selected by their range
+(or latest when no version is specified); pinned npm versions are skipped; git
+clones are reconciled to their configured refs without advancing those refs;
+local-path sources need no update and are ignored.
+
+These commands operate on the package layer. They do not change the fact that
+an extension is regular code with the privileges of the Pi process.
+
+## Themes and the TUI boundary
+
+Theme paths load JSON themes. Themes influence colors/formatting used by
+interactive components and extension renderers; they do not modify keybindings
+or component logic. An extension can query/change themes through `ctx.ui`, but
+should use semantic theme keys (`accent`, `warning`, `toolTitle`, and so on)
+instead of ANSI constants so the user's theme continues to work.
+
+## Reload semantics
+
+`/reload` replaces extensions, skills, prompts, themes, and context files; it
+does not preserve arbitrary extension closures. From an extension's point of
+view, the observable lifecycle events are:
+
+```text
+old runtime: session_shutdown { reason: "reload" }
+new runtime: session_start { reason: "reload" }
+             resources_discover { reason: "reload" }
+```
+
+Pi reloads settings and resources between the shutdown and startup events while
+preserving the runtime's already-resolved project trust state. It does not
+reread a decision just saved by `/trust`; restart Pi for that decision to affect
+resource loading. Code after `await ctx.reload()` nevertheless continues in the
+old command call frame. Treat that call as terminal for the handler, and rebuild
+session-scoped state when the new runtime observes `session_start`.
+
+## Pre-commit security and reproducibility checklist
+
+Use this checklist to review whether a repository configuration has the intended
+security boundary and will behave consistently for teammates and CI:
+
+1. Does this setting execute code or fetch/install dependencies?
+2. Does the team intend to trust the repository for that behavior?
+3. Are environment references used for secrets instead of literal credentials?
+4. Are relative paths intentional for this scope?
+5. Does a nested override preserve the global fields you expect?
+6. Will noninteractive CI receive the required trust decision?
+7. Can the change be represented as a skill/theme/template instead of code?
+
+These questions make configuration review an architectural step rather than
+an afterthought.

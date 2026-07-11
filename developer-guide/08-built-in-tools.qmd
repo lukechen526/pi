@@ -1,14 +1,16 @@
-# Built-in tools: filesystem and shell execution
+# Built-in tools: filesystem, shell, and discovery {#sec:tools}
 
-The coding agent ships seven named tools: `read`, `bash`, `edit`, `write`,
-`grep`, `find`, and `ls`. They are not special to the agent loop. Each is a
-TypeBox-schema-backed tool definition wrapped into an `AgentTool`, which is why
-extensions can observe, replace, or add tools through the same lifecycle.
+Pi ships seven named tools: `read`, `bash`, `edit`, `write`, `grep`, `find`,
+and `ls`. Together they cover filesystem access and mutation, shell execution,
+and bounded repository discovery. Each built-in is a tool definition with a
+TypeBox parameter schema that Pi wraps as an `AgentTool`, placing built-ins and
+extension-provided tools in the same lifecycle.
 
 Implementation lives in `packages/coding-agent/src/core/tools/`. The public
-construction helpers are re-exported from the coding-agent package. This
-chapter focuses on behavior that matters when using, extending, or debugging
-the tools, not on teaching shell commands.
+construction helpers are re-exported from the
+`@earendil-works/pi-coding-agent` package. The chapter focuses on behavior that
+matters when using, extending, or debugging the tools rather than teaching
+shell commands.
 
 ## Tool registry and default selection
 
@@ -22,14 +24,18 @@ tool definition: schema + description + execute + optional renderers
 wrapToolDefinition(...)
        |
        v
-agent-core AgentTool: validated arguments + execution callback
+@earendil-works/pi-agent-core AgentTool: validated arguments + callback
 ```
 
-The coding-agent SDK creates all definitions so extensions can see metadata,
-but the initial active set is the four coding tools: `read`, `bash`, `edit`,
-and `write`. `grep`, `find`, and `ls` are available definitions but not part of
-that default active list. Explicit tool selection, `--no-builtin-tools`,
-extensions, or `pi.setActiveTools()` can change what the model receives.
+In prose, Pi combines a schema, description, execution function, and optional
+renderers, then wraps that definition as the validated `AgentTool` consumed by
+the agent loop.
+
+Pi's SDK creates all definitions so extensions can inspect their metadata, but
+the initial active set contains the four coding tools: `read`, `bash`, `edit`,
+and `write`. `grep`, `find`, and `ls` remain available definitions outside that
+default active list. Explicit tool selection, `--no-builtin-tools`, extensions,
+or `pi.setActiveTools()` can change what the model receives.
 
 ## Shared design principles
 
@@ -42,10 +48,12 @@ Every built-in tool follows the same broad contract:
 4. Failure throws; the agent loop converts it into an error tool result.
 5. Optional renderers turn call/result data into a compact TUI row.
 
-Tool descriptions and `promptGuidelines` are not decoration. Coding-agent uses
-active tools' snippets/guidelines while rebuilding the system prompt. For
-example, `read` tells the model to inspect files with `read` rather than `cat`
-or `sed`; `write` says it is for new files or complete rewrites.
+Tool descriptions and prompt metadata directly shape model behavior.
+`promptGuidelines` is an optional list of instruction bullets on a tool
+definition. When rebuilding the system prompt, Pi includes the snippets and
+`promptGuidelines` from active tools. For example, `read` tells the model to
+inspect files with `read` rather than `cat` or `sed`; `write` reserves full-file
+output for new files or complete rewrites.
 
 ## Output limits protect the next provider turn
 
@@ -62,8 +70,9 @@ The correct truncation direction depends on the tool:
 | Individual match line | Prefix is usually enough | Truncate line |
 
 Built-in tools report truncation to the model and provide an actionable next
-step. A custom tool must do the same. Quietly dropping output makes a model
-repeat a command or assume a partial result is complete.
+step. Custom tools should pair every truncated result with the same explicit
+status and recovery guidance so the model can continue without mistaking
+partial output for a complete result.
 
 ## `read`: text ranges and image attachments
 
@@ -71,20 +80,20 @@ repeat a command or assume a partial result is complete.
 `limit`. It resolves the path relative to the session cwd, checks readability,
 then branches on MIME detection.
 
-For text files it splits lines, applies the requested range, and then applies
-shared truncation. The continuation messages are deliberately specific:
+For text files, `read` splits lines, applies the requested range, and then
+applies shared truncation. The continuation messages are deliberately specific:
 
 ```text
 Showing lines 1-2000 of 6500. Use offset=2001 to continue.
 ```
 
-If a single first line exceeds the byte limit, it reports that condition and
-suggests a bounded shell fallback. That avoids pretending the complete line
-was read.
+If a single first line exceeds the byte limit, the `read` result reports that
+condition and suggests a bounded shell fallback. The explicit notice accurately
+marks the line as partial.
 
-For supported images (JPEG, PNG, GIF, WebP, BMP), it reads binary data,
-processes/resizes it subject to settings, and returns an image content block
-alongside a text note. The tool checks the current model's input capabilities
+For supported images (JPEG, PNG, GIF, WebP, BMP), `read` loads the binary data,
+processes and resizes the image subject to settings, and returns an image
+content block alongside a text note. The tool checks the current model's input capabilities
 and adds a note when the model cannot receive images. The global
 `images.blockImages` setting adds another later defense in the conversion path.
 
@@ -95,8 +104,8 @@ default uses the local filesystem. An extension can build a read tool backed by
 SSH, a container, or another remote system by providing those operations. The
 schema and TUI behavior stay the same; only the I/O boundary changes.
 
-That is preferable to reimplementing the full read tool merely to redirect
-filesystem access.
+Providing `ReadOperations` preserves the existing schema and TUI behavior
+while redirecting filesystem access, avoiding a duplicate read implementation.
 
 ## `write`: create or replace a complete file
 
@@ -121,11 +130,10 @@ The queue is keyed by a resolved, canonical path. Existing paths are passed
 through `realpath`, so symlink aliases share a queue; missing target paths use
 the resolved absolute path. Different files still execute in parallel.
 
-Notice the abort design: the write tool does not reject from an abort-event
-listener and release the queue while a filesystem operation is still in flight.
-It checks `signal.aborted` between awaited operations, keeping the queue held
-until the current operation has settled. A custom mutating tool should follow
-the same model.
+The sequence above checks abort three times—before `mkdir`, after `mkdir`, and
+after `writeFile`—and holds the same-file queue until each in-flight filesystem
+operation settles. A custom mutating tool should preserve this ordering so the
+next writer starts from settled filesystem state.
 
 ## `edit`: exact replacement and queued mutation
 
@@ -135,9 +143,10 @@ lets Pi detect ambiguous or stale replacements rather than applying a fuzzy
 patch to the wrong location.
 
 Like `write`, `edit` resolves the target and wraps the full read-modify-write
-window in `withFileMutationQueue`. Queue only the final write and two parallel
-tools can both read old content, derive conflicting replacements, then lose one
-change. The lock must cover reading, validation, transformation, and write.
+window in `withFileMutationQueue`. If a custom read-modify-write tool queues
+only its final write, two parallel calls can both read old content, derive
+conflicting replacements, and lose one change. The lock must cover reading,
+validation, transformation, and writing.
 
 Use `edit` rather than `write` when preserving unrelated content is important.
 Use `write` when creating a file or deliberately replacing its entirety. The
@@ -147,14 +156,20 @@ model prompt guidelines encode this distinction to reduce destructive rewrites.
 
 `bash.ts` accepts a command and optional timeout in seconds. It uses
 `createLocalBashOperations()` by default, which resolves the configured shell,
-verifies the cwd, starts a child process with stdout/stderr pipes, tracks a
-detached process tree where the platform supports it, and kills that tree for
-cancellation or timeout.
+verifies the cwd, and starts a child process with stdout/stderr pipes. On
+non-Windows systems the child starts as a detached process group. Cancellation
+and timeout call `killProcessTree`, which invokes `taskkill /F /T` on Windows;
+on non-Windows systems it sends `SIGKILL` to the process group and falls back
+to killing the child process.
 
 The tool can apply a configured `shellCommandPrefix` and an extension-provided
-`spawnHook` that changes command, cwd, or environment. This is the intended
-seam for sandbox/container/remote routing; it avoids a brittle string rewrite
-inside a generic `tool_call` hook.
+`spawnHook` that changes the command, cwd, or environment. These are command
+customization and routing hooks, not security boundaries. For enforced
+containment, provide `BashOperations` whose `exec` implementation enters the
+sandbox or remote environment, and replace the filesystem tools' operations so
+`read`, `write`, `edit`, `grep`, `find`, and `ls` use the same boundary. Apply
+the boundary to `user_bash` as well. A `tool_call` hook can add policy checks,
+but operating-system or container controls must enforce isolation.
 
 ### Streaming output
 
@@ -168,8 +183,8 @@ model-facing notice. Nonzero exit status, timeout, and abort become thrown
 errors with accumulated output appended where available. The agent loop then
 returns that failure as an error tool result to the model.
 
-This is why a failed command can still be useful: the model receives the log
-and exit status rather than merely an exception string.
+A failed command therefore remains actionable: the model receives the log and
+exit status along with the error instead of only an exception string.
 
 ## `grep`, `find`, and `ls`: bounded repository discovery
 
@@ -177,7 +192,7 @@ These search/listing tools use the cwd and respect ignore policy. Their
 schemas make the intended scope explicit:
 
 | Tool | Important inputs | Default limit | Result shape |
-|---|---|---:|---|
+| --- | --- | ---: | --- |
 | `grep` | pattern, optional path/glob, literal/case/context options | 100 matches | File path and line-numbered matching lines |
 | `find` | glob pattern, optional path | 1,000 results | Matching paths relative to search directory |
 | `ls` | optional directory path | 500 entries | Alphabetical listing, directory suffix `/`, includes dotfiles |
@@ -186,9 +201,9 @@ All three also use the shared byte cap. `grep` additionally limits long output
 lines. The tools are better suited to agent context than raw `rg`/`find` shell
 output because their limits and formatting are predictable.
 
-They are exposed as built-in names and can be registered/activated by an
-extension. If you override one, retain its result details and renderer contract
-unless you intentionally own every affected display/session behavior.
+Pi exposes all three as built-in names that an extension can register and
+activate. When overriding one, retain its result details and renderer contract
+unless the extension also supplies every affected display and session behavior.
 
 ## Paths, cwd, and remote operations
 
@@ -196,44 +211,50 @@ Tools must distinguish what the model typed from the actual target path. The
 built-ins resolve relative paths against the session cwd, not an arbitrary
 process cwd, and format paths for display relative to the session when useful.
 
-Remote execution does not mean every tool must become shell text. The exported
-operations interfaces make I/O replaceable per tool:
+Remote execution can preserve structured tool calls. The exported operations
+interfaces make each tool's I/O replaceable:
 
 ```text
 ReadOperations    readFile + access + optional MIME detection
 WriteOperations   mkdir + writeFile
-EditOperations    read/write/mkdir-style file mutation operations
+EditOperations    readFile + writeFile + access
 BashOperations    exec with data callback, cwd, signal, timeout, env
 Grep/Find/Ls      operation interfaces for filesystem/search behavior
 ```
 
+Each line names the boundary an extension replaces: file tools receive focused
+filesystem methods, while `bash` receives an execution method with streaming
+and cancellation inputs.
+
 An extension can create a tool with remote operations, register it under the
-same name, and leave Pi's validation/rendering behavior intact. The extension
+same name, and preserve Pi's validation and rendering behavior. The extension
 documentation's SSH and sandbox examples demonstrate this pattern.
 
 ## User shell commands are separate from model `bash`
 
 In interactive mode, input beginning with `!` runs a user shell command;
 `!!` marks its result excluded from LLM context. The extension `user_bash`
-event can provide custom operations or a complete result for that path.
+event can provide custom operations or a complete result for the user-command
+path.
 
-That is not identical to an assistant's `bash` tool call. The user is directly
-requesting execution, while a tool call is model-generated and is represented
-in the assistant/tool-result protocol. A sandbox extension that wants
-consistent behavior often handles both: it supplies operations for built-in
-tools and for `user_bash`.
+User shell commands and assistant `bash` calls follow distinct paths. The user
+directly requests a `!` command, while the model generates a tool call that Pi
+records in the assistant/tool-result protocol. A sandbox extension should cover
+both paths by supplying sandboxed operations for built-in tools and
+`user_bash`.
 
 ## Tool rendering is a first-class interface
 
 Built-in definitions include `renderCall` and `renderResult` functions. The
 interactive tool row receives current arguments, partial/final state, expanded
-flag, prior component, execution time, and an `invalidate()` callback. This
-permits syntax-highlighted read/write previews, compact default rendering with
-an expand hint, streamed shell output, and error-specific presentation.
+flag, prior component, execution time, and an `invalidate()` callback. Those
+inputs support syntax-highlighted read/write previews, compact default
+rendering with an expand hint, streamed shell output, and error-specific
+presentation.
 
 An extension that overrides built-in execution can omit a renderer and inherit
-the built-in renderer per slot. That convenience depends on keeping the
-expected call args/result details shape. If an override changes those shapes,
+the built-in renderer per slot. Renderer inheritance requires the expected call
+argument and result-detail shapes. When an override changes either shape,
 provide compatible renderers or a self-contained rendering shell.
 
 ## Tool lifecycle and extension interception
@@ -249,29 +270,57 @@ tool_execution_start
   -> final toolResult message events
 ```
 
+In prose, Pi validates and gates a call before execution, emits zero or more
+updates while it runs, allows extensions to patch the result, then emits the
+end event and final protocol messages.
+
 In default parallel mode, start/preflight is source-ordered, execution/update
 events can interleave, and final tool-result messages are emitted in assistant
-source order. Do not build a custom tool that assumes another tool's result is
-already in `ctx.sessionManager` during its own `tool_call` handler.
+source order. Custom tools should coordinate through explicit shared state or
+lifecycle events instead of expecting an earlier sibling tool result to already
+appear in the extension context's `ctx.sessionManager`
+(`ReadonlySessionManager` over the durable session tree) during a concurrent
+`tool_call` handler.
 
 ## A safe custom file-mutation skeleton
 
-The following is a shape, not a complete product tool. It shows the required
-ordering for an extension that changes one file.
+The following focused example shows the required same-file mutation ordering.
+A production tool also needs the schema, result, rendering, and test concerns
+listed after the code.
 
 ```ts
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-async function replaceOnce(cwd: string, path: string, oldText: string, newText: string, signal?: AbortSignal) {
+async function replaceOnce(
+  cwd: string,
+  path: string,
+  oldText: string,
+  newText: string,
+  signal?: AbortSignal,
+) {
   const target = resolve(cwd, path);
+
+  // Keep read -> validate -> transform -> write inside the same-file queue.
   return withFileMutationQueue(target, async () => {
     if (signal?.aborted) throw new Error("Operation aborted");
+
     const current = await readFile(target, "utf8");
     if (signal?.aborted) throw new Error("Operation aborted");
-    if (!current.includes(oldText)) throw new Error("Expected text was not found");
-    await writeFile(target, current.replace(oldText, newText), "utf8");
+
+    if (oldText.length === 0) throw new Error("Expected text must not be empty");
+    const match = current.indexOf(oldText);
+    if (match === -1) throw new Error("Expected text was not found");
+    if (current.indexOf(oldText, match + oldText.length) !== -1) {
+      throw new Error("Expected text must occur exactly once");
+    }
+
+    const updated =
+      current.slice(0, match) + newText + current.slice(match + oldText.length);
+    if (signal?.aborted) throw new Error("Operation aborted");
+
+    await writeFile(target, updated, "utf8");
     if (signal?.aborted) throw new Error("Operation aborted");
   });
 }
@@ -284,7 +333,7 @@ truncation where relevant, and tests for no-match, abort, and concurrent calls.
 
 Before exposing a custom tool to a model, answer:
 
-1. Does the TypeBox schema constrain the actual safe input shape?
+1. Does the TypeBox schema allow only safe inputs?
 2. Is the tool active only when its prompt guidance is appropriate?
 3. Does every large output have a bounded, actionable representation?
 4. Does cancellation reach all long-running work?
@@ -295,5 +344,5 @@ Before exposing a custom tool to a model, answer:
 9. Is a policy gate better implemented as `tool_call` interception than inside
    the tool itself?
 
-Treat tools as a public protocol between the model, session, UI, and extension
-ecosystem—not as a private helper function.
+Treat tools as a public protocol connecting the model, session, UI, and
+extension ecosystem.

@@ -1,0 +1,345 @@
+# Run modes, SDK embedding, and operational boundaries {#sec:modes}
+
+The `pi` binary is one host for the coding-agent runtime. The same session
+construction and event model can also serve print, JSON, RPC, and programmatic
+SDK use. Understanding the modes prevents terminal assumptions from leaking
+into automation and helps you select an integration surface deliberately.
+
+Start with `packages/coding-agent/src/main.ts`,
+`packages/coding-agent/src/modes/`, and
+`packages/coding-agent/src/core/sdk.ts`. For SDK examples, see
+`packages/coding-agent/examples/sdk/` and
+`packages/coding-agent/docs/sdk.md`. Canonical CLI docs for the noninteractive
+hosts are `packages/coding-agent/docs/json.md` and
+`packages/coding-agent/docs/rpc.md`.
+
+## How Pi chooses a mode
+
+`packages/coding-agent/src/main.ts` resolves application mode from explicit
+arguments and terminal state:
+
+| Application mode | Typical trigger | Runtime host/path |
+|---|---|---|
+| Interactive | TTY stdin/stdout without print, JSON, or RPC selection | `InteractiveMode` |
+| Print | `-p` or non-TTY stdin/stdout | `runPrintMode(..., { mode: "text" })` |
+| JSON | `--mode json` | `runPrintMode(..., { mode: "json" })` |
+| RPC | `--mode rpc` | `runRpcMode(...)` |
+
+The distinction is not cosmetic. It changes whether Pi can prompt a user, how
+output is emitted, and which extension UI methods are meaningful. All modes
+still rely on the coding-agent session/runtime instead of implementing separate
+provider/tool loops.
+
+## Extension mode behavior
+
+An extension context exposes `mode` and `hasUI`. `ctx.mode` is a string whose
+`ExtensionMode` type is the literal union `"tui" | "rpc" | "json" | "print"`.
+`ctx.hasUI` is not a synonym for "interactive terminal"; it reports whether the
+extension runner is bound to a real `ExtensionUIContext` rather than the no-op
+context used when there is no host UI protocol.
+
+| Application surface | `ctx.mode` | `ctx.hasUI` | Design implication |
+|---|---|---|---|
+| Interactive terminal | `"tui"` | true | Full components, dialogs, editor behavior |
+| RPC | `"rpc"` | true | Protocol-backed dialogs/notices exist; custom terminal UI is limited |
+| JSON | `"json"` | false | No UI protocol; do not wait for a user prompt or render components |
+| Print | `"print"` | false | Agent runs, then process exits; UI calls are no-ops/fallbacks |
+
+That table is the practical distinction between JSON and RPC for extension
+authors. JSON and print share the single-run print host and bind a no-op UI, so
+dialog methods either no-op or resolve without a user. RPC binds a protocol UI
+so `select`/`confirm`/`input`/`editor` become request/response messages over
+stdin/stdout, while terminal-only methods such as `custom()` remain unavailable.
+Guard on both:
+
+- use `ctx.hasUI` before waiting for a user decision;
+- use `ctx.mode === "tui"` for terminal components and other TUI-only behavior.
+
+A policy tool that requires confirmation needs an explicit noninteractive decision
+when `!ctx.hasUI`, such as blocking with a clear reason, rather than awaiting
+`ctx.ui.confirm()`.
+
+## Print mode as a single-run host
+
+Print mode is appropriate for scripts that want one response rather than a
+long-lived terminal session. `packages/coding-agent/src/main.ts` prepares initial
+text/images from arguments, files, and stdin, then passes that input to
+`runPrintMode` in `packages/coding-agent/src/modes/print-mode.ts` with text
+output selected. The normal `AgentSession.prompt()` preprocessing remains
+active, so extensions, context, tools, provider selection, and session policy
+can still participate. After the prompts finish, the host writes only the text
+blocks from the final assistant message and exits.
+
+For extension authors, that output rule means a notification or custom UI value
+is not part of the script's result. Put required information into model-facing
+content so it can appear in the final response, or persist it through an
+explicit durable channel. Do not depend on delayed background work or UI state
+surviving the response.
+
+## JSON mode and machine-readable automation
+
+JSON mode is not a separate session host. `packages/coding-agent/src/main.ts`
+calls `runPrintMode` with `mode: "json"`. That path writes the session header,
+when present, followed by subscribed session events as newline-delimited JSON.
+It therefore provides a single-run event stream rather than print mode's final
+assistant text or RPC's persistent command channel. See also
+`packages/coding-agent/docs/json.md`.
+
+### Session header on the JSON stream
+
+The first JSONL object is the same session-file header that begins a persisted
+session, when one is available. In source it is `SessionHeader` from
+`packages/coding-agent/src/core/session-manager.ts`: metadata immediately written
+by `runPrintMode` before subscribed events, not a conversation entry.
+
+```json
+{"type":"session","version":3,"id":"<session-uuid>","timestamp":"<iso-time>","cwd":"/work/project"}
+```
+
+Fields:
+
+- `type`: always `"session"` for the header;
+- `version`: optional session format version (current writes use `3`; older v1
+  headers may omit it, and loaders treat missing `version` as `1`);
+- `id`: durable session identifier;
+- `timestamp`: session creation time;
+- `cwd`: working directory recorded for the session;
+- `parentSession`: optional source session path when a session is forked.
+
+This header has no `parentId` and is not part of the message tree. It is the
+metadata line documented in
+[Sessions, branches, and durable context](#sec:sessions) and
+`packages/coding-agent/docs/session-format.md`. Subsequent JSON-mode lines are
+`AgentSessionEvent` objects as the single-run prompt proceeds.
+
+In extension code, avoid stdout. Arbitrary `console.log` or other writes can
+corrupt the JSONL stream consumed by automation. Prefer documented event/UI
+mechanisms, or emit controlled diagnostics on stderr when that is acceptable for
+the embedding host.
+
+The same caution applies to provider payload tracing. A raw JSON dump may
+contain private context and may interfere with automation output. Build a
+sanitized, opt-in diagnostic command instead.
+
+## RPC mode as a persistent process boundary
+
+RPC mode keeps a process alive for command/request exchange. Start it with:
+
+```bash
+pi --mode rpc [options]
+```
+
+Implementation and types live under
+`packages/coding-agent/src/modes/rpc/`, with the host entry in
+`packages/coding-agent/src/modes/rpc/rpc-mode.ts`, framing in
+`packages/coding-agent/src/modes/rpc/jsonl.ts`, command/response types in
+`packages/coding-agent/src/modes/rpc/rpc-types.ts`, and a typed client in
+`packages/coding-agent/src/modes/rpc/rpc-client.ts`. The runtime and session still
+own model/tool state; RPC is a transport around that behavior, not an alternate
+agent implementation. The full command and event catalog is
+`packages/coding-agent/docs/rpc.md`.
+
+### Framing and object shapes
+
+- Transport is strict JSONL over stdin/stdout.
+- The only record delimiter is LF (`\n`). Clients may strip a trailing `\r` so
+  CRLF-delimited input is accepted, but must not treat Unicode line separators
+  such as `U+2028`/`U+2029` as record boundaries. Those characters are valid
+  inside JSON strings, so a reader that only splits on LF stays correct;
+  Node `readline` is not protocol-compliant because it also splits on
+  `U+2028`/`U+2029` and can break a single logical JSON record.
+- Commands are JSON objects on stdin with a `type` field and an optional `id`
+  for request/response correlation.
+- Command replies are objects with `type: "response"`, `command`, `success`,
+  optional `data`/`error`, and the same `id` when one was supplied.
+- Session events are streamed to stdout as plain event objects. They do not
+  carry command `id` values.
+- Extension UI dialog traffic uses `type: "extension_ui_request"` on stdout and,
+  for dialogs, matching `type: "extension_ui_response"` objects on stdin.
+
+### Lifecycle in overview
+
+1. The process starts, takes over stdout for protocol traffic, binds the
+   extension/runtime host with `mode: "rpc"`, and waits for commands on stdin.
+2. A client sends commands such as `prompt`, `steer`, `follow_up`, `abort`,
+   `get_state`, `get_messages`, model/thinking controls, compaction/retry
+   controls, session navigation around entries, or `bash`.
+3. For `prompt`, the immediate `response` means the prompt was
+   accepted, queued, or handled; later progress appears as events. For
+   streaming agents, `prompt` requires `streamingBehavior` (`"steer"` or
+   `"followUp"`) when the agent is already running, or the command fails before
+   acceptance.
+4. While work proceeds, the host streams session events (`agent_start`,
+   turns/messages/tools, compaction/retry updates, and eventually
+   `agent_settled` when no automatic continuation remains).
+5. If an extension uses dialog/fire-and-forget UI methods, the host emits
+   `extension_ui_request`. Dialog methods block until the client answers with
+   the matching `extension_ui_response` or a timeout/default resolves them;
+   fire-and-forget methods do not wait.
+6. The process remains available for further commands until the client closes
+   the stream or shutdown is requested.
+
+Extensions can use `ctx.hasUI` in RPC mode for operations that map to protocol
+UI messages. Dialog methods (`select`, `confirm`, `input`, `editor`) and
+fire-and-forget methods such as `notify`/`setStatus` are functional there.
+Terminal-only methods are not: `ctx.ui.custom()` returns `undefined`, and other
+TUI-only surface controls are no-ops or degraded. Design commands/tools with a
+structured noninteractive fallback when they might also run through JSON/print.
+
+In extension code, avoid stdout. RPC clients parse every stdout line as protocol
+JSON; incidental writes corrupt the transport. Prefer extension UI methods,
+session/event channels, or stderr for diagnostics.
+
+## The `packages/ai` boundary
+
+`packages/ai` is the lower-level, provider-neutral layer for model definitions,
+authentication support, request serialization, and normalized streaming events.
+It does not own session persistence, extension loading, built-in tools,
+compaction/retry policy, system-prompt assembly, or any of the run-mode hosts
+described above.
+
+Choose that package when the work is about model/protocol behavior. Stay in
+coding-agent modes/SDK when the work is about host policy around those model
+calls.
+
+## The public SDK entry point
+
+`createAgentSession(options?)` in `packages/coding-agent/src/core/sdk.ts` is the
+composition entry point for a programmatic host. It can create defaults or
+accept caller-provided cwd, agent directory, model, session manager, settings
+manager, model registry, resource loader, scoped models, tool restrictions,
+custom tools, and a session start event.
+
+The SDK does several pieces of application policy on purpose:
+
+```text
+resolve cwd and agent directory
+  -> auth/model/settings/session services
+  -> resource loader (unless caller supplies one)
+  -> restore/choose model and thinking level
+  -> create Agent with coding-agent conversion/provider hooks
+  -> create AgentSession and extension runtime
+```
+
+The result gives an `AgentSession`, extension load result, and possible model
+fallback message. A host can subscribe to the session, call `prompt`, provide
+custom tools, inspect sessions, or embed its own UI.
+
+## Why SDK callers should not reimplement `packages/coding-agent/src/main.ts`
+
+It is tempting to instantiate `Agent` directly because its constructor is
+small. That skips coding-agent semantics including resource loading, session
+persistence, model restore/default selection, built-in tool definitions,
+extension runner integration, system-prompt building, retry, and compaction.
+Those policies are exactly what `createAgentSession` and the CLI mode hosts
+assemble on top of the `packages/ai` stream/provider primitives.
+
+Use `Agent` directly only when you deliberately own all of those policies.
+Use `createAgentSession` when you want Pi's coding-agent behavior in a new host.
+Use the CLI/RPC surface when a separate process boundary is preferable.
+
+## Custom tools supplied by an SDK host
+
+`createAgentSession` accepts custom tool definitions alongside built-in-tool
+selection. These tools enter the same registry/extension wrapping flow as an
+extension-registered tool. Give them a clear source identity, schema, durable
+details shape, and prompt metadata where appropriate.
+
+An SDK host can use this for application-specific operations without requiring
+an extension file on disk. The tradeoff is scope: a tool supplied by one host
+does not automatically appear in a user's ordinary `pi` invocation.
+
+## Initial messages and attachments
+
+The CLI's initial-message machinery can combine explicit prompt text, piped
+stdin, file arguments, and supported images. Interactive mode feeds the
+resulting message/images through the same session prompt path used after the
+editor submits text. This keeps extension `input`/`before_agent_start` behavior
+consistent between startup prompts and later user prompts.
+
+When embedding, construct user content as text/image blocks and let the
+session/agent conversion path handle the provider representation. Do not
+pre-serialize provider-specific image payloads in a generic SDK host.
+
+## Operational safety boundaries
+
+Pi runs with the operating-system permissions of its process. It does not add a
+built-in filesystem/process/network permission sandbox. Treat containerization
+or other OS-level sandboxing as the recommended way to create stronger
+isolation when automation or untrusted tools require it. That recommendation
+matches the root `README.md` containerization guidance and
+`packages/coding-agent/docs/containerization.md`.
+
+This has mode-specific consequences:
+
+- A print/CI invocation can execute the same tools as an interactive one.
+- Trust gates project extensions/resources, but do not sandbox global code.
+- A custom provider can transmit context to its configured endpoint.
+- `bash`, `write`, and extension `exec` run with host process authority.
+
+Use OS/container boundaries for security enforcement. Use extension tool gates
+for workflow policy and user confirmation. Do not confuse a model instruction
+or a theme with a security control.
+
+## Operational observability
+
+### Behavior provided by Pi
+
+Startup diagnostics are collected during service/session construction and
+reported by the application layer. Extension load failures are startup errors
+and include a hint to retry without extensions. Settings and model load issues
+surface as diagnostics, while the output guard protects protocol output from
+ordinary writes. Timing instrumentation also exists, including optional startup
+timing output.
+
+### Host-level recommendations
+
+For a production-like integration, capture:
+
+- selected mode and cwd;
+- selected model/provider/API type, without credentials;
+- session ID/path and persistence state;
+- extension/resource load diagnostics;
+- agent/turn/tool timing and completion reason;
+- provider status metadata when safely available;
+- cancellation/retry/compaction decisions.
+
+This is integration guidance rather than a claim that Pi emits every item as a
+ready-made telemetry record. Choose fields that make incidents diagnosable
+without collecting full user prompts.
+
+## Choosing an integration approach
+
+| Goal | Best starting point |
+|---|---|
+| Human coding in a terminal | Interactive CLI |
+| One scripted answer | Print mode |
+| Machine-readable event/result stream | JSON mode |
+| Long-lived external controller | RPC mode |
+| Node application sharing Pi semantics | `createAgentSession` SDK |
+| New model protocol/provider behavior | Provider extension or `packages/ai` contribution |
+| Custom execution policy/UI in existing Pi | Extension |
+
+Choosing the boundary early is an architectural decision. It determines who
+owns terminal state, persistence, authentication, user confirmation, and
+process lifetime.
+
+## Operational checklist
+
+Before putting Pi into automation or another host:
+
+1. Choose the mode/SDK boundary intentionally.
+2. Set a trust policy appropriate for noninteractive projects.
+3. Select or restrict models/tools explicitly if policy requires it.
+4. Store credentials in supported auth/config mechanisms, not prompt text.
+5. Ensure output/logging does not corrupt JSON/RPC protocols.
+6. Forward cancellation from the host into Pi's abortable work.
+7. Decide session persistence and cleanup behavior.
+8. Add an OS/container sandbox if untrusted code or high-risk tools are in scope.
+
+These operational decisions are the final layer of the architecture: Pi's
+internal boundaries are valuable only when the host uses them deliberately.
+For concrete recovery behavior at these boundaries, continue with
+[Failure and recovery reference](#sec:failure); for the
+provider layer behind every mode, see
+[Models, providers, and authentication](#sec:models).

@@ -1,33 +1,38 @@
-# Testing, debugging, and contribution workflow
+# Testing, debugging, and contribution workflow {#sec:testing}
 
-Architecture knowledge becomes useful when it shortens a safe debugging loop.
-Pi's repository rules distinguish code checks, targeted tests, interactive
-testing, and real-provider behavior. Follow the narrowest useful validation
-path; do not make a provider call merely to prove a local state transition.
+This chapter turns the system map from [Chapter 2](#sec:architecture) into a
+practical workflow for reproducing failures, choosing tests, and preparing a
+change for review. Pi's repository rules distinguish code checks, targeted
+tests, interactive testing, and real-provider behavior. Use the narrowest
+validation path that exercises the behavior. A local state transition does not
+require a provider call.
 
-The authoritative local rules are in `AGENTS.md`. Coding-agent also documents
-development behavior in `packages/coding-agent/docs/development.md` and
-extension behavior in `packages/coding-agent/docs/extensions.md`.
+Repository-wide contribution rules live in `AGENTS.md`. Coding-agent-specific
+development and extension guidance lives in
+`packages/coding-agent/docs/development.md` and
+`packages/coding-agent/docs/extensions.md`. For runtime failure ownership and
+recovery behavior, see [Chapter 16](#sec:failure).
 
-## Start with a reproducible boundary
+## Localize the failure first
 
 For a report such as "Pi ignored my extension" or "a tool result rendered
-wrong," identify which boundary is wrong before changing code:
+wrong," identify the first subsystem where observed behavior diverges from the
+expected path before changing code:
 
-| Symptom | First boundary to inspect |
+| Symptom | Inspect first (in order) |
 |---|---|
-| Extension is absent | Trust decision, resource loader discovery, factory load error |
-| Command runs but prompt is unchanged | Extension command/input/before-agent event path |
-| Model gets wrong messages | Session context, `context` hook, `convertToLlm`, provider payload |
-| Tool has invalid args | Schema, `prepareArguments`, model tool-call block |
-| Tool output is lost | Truncation, tool result, parallel ordering, renderer |
-| Provider call fails | Model registry/auth, adapter response, retry configuration |
-| UI is stale or clipped | Session event, renderer component, TUI invalidation/width |
-| Resume/fork loses state | Session branch/context, extension reconstruction, stale replacement closure |
+| Extension is absent | 1) trust decision → 2) resource loader discovery → 3) factory load error |
+| Command runs but prompt is unchanged | 1) extension command event → 2) input handling → 3) before-agent path |
+| Model gets wrong messages | 1) session context → 2) `context` hook → 3) `convertToLlm` → 4) provider payload |
+| Tool has invalid args | 1) schema → 2) `prepareArguments` → 3) model tool-call block |
+| Tool output is lost | 1) truncation → 2) tool result → 3) parallel ordering → 4) renderer |
+| Provider call fails | 1) model registry/auth → 2) adapter response → 3) retry configuration |
+| UI is stale or clipped | 1) session event → 2) renderer component → 3) TUI invalidation/width |
+| Resume/fork loses state | 1) session branch/context → 2) extension reconstruction → 3) stale replacement closure |
 
-This map prevents a common waste of time: editing the TUI when the agent never
-emitted a message event, or editing a provider adapter when an extension never
-loaded due to project trust.
+This map prevents wasted work: editing the TUI cannot fix an agent that never
+emitted a message event, and editing a provider adapter cannot fix an extension
+blocked by project trust.
 
 ## Static checking versus tests
 
@@ -36,11 +41,11 @@ checks the workspace, verifies pinned dependencies/import rules/shrinkwrap
 state, and runs the root TypeScript check. It is a broad code-quality gate, not
 the test suite.
 
-Tests prove behavioral expectations. Do not use `npm run build` as a proxy for
-tests, and do not run the full Vitest suite casually: the repository warns that
-some end-to-end tests can activate when provider/auth environment variables are
-present. For broad non-LLM coverage, use `./test.sh` from the repository root;
-for a targeted coding-agent test, run the Vitest CLI from the package root as
+`npm run build` only compiles packages; it is not a test suite. Tests verify
+behavioral expectations. The full Vitest suite can activate end-to-end tests when
+provider or authentication environment variables are present. To avoid that
+and get broad non-LLM coverage, use `./test.sh` from the repository root. For a
+targeted coding-agent test, run the Vitest CLI from the package root as
 described by `AGENTS.md`.
 
 ## Test at the correct package
@@ -67,7 +72,7 @@ different failure surface than the behavior being tested.
 - Correct event ordering and return semantics.
 - Tool block/allow behavior for policy hooks.
 - Reload cleanup and state reconstruction.
-- Mode fallback when `ctx.hasUI` is false.
+- Non-interactive fallback when the extension context reports `ctx.hasUI === false`.
 - Session replacement with a fresh `withSession` context.
 
 ### Tools
@@ -103,18 +108,17 @@ the session. This produces a repeatable artifact for editor, command,
 streaming, and rendering behavior without relying on the developer's current
 terminal state.
 
-For a UI reproduction, record terminal dimensions, theme and keybinding
-overrides, pasted text/image input, exact keys, model/streaming state, and
-captured terminal lines or a `/debug` log. That information often explains a
-visual issue that a screenshot alone cannot reproduce.
+For a UI reproduction, record dimensions, theme/keybindings, exact input and
+keys, model/streaming state, and captured lines or a `/debug` log. Screenshots
+alone often omit what is needed to reproduce a visual bug.
 
 ## `/debug` and diagnostic data
 
 The hidden `/debug` command writes `~/.pi/agent/pi-debug.log` with rendered TUI
-lines containing ANSI codes and the last messages sent to the LLM. It is a
-source of truth for a rendering/context mismatch, but it may contain sensitive
-prompts, file contents, and tool results. Treat it as local sensitive data; do
-not paste it into a public issue unreviewed.
+lines containing ANSI codes and the last messages sent to the LLM. Comparing
+those two views can reveal whether a mismatch arose before or during rendering.
+The log may contain sensitive prompts, file contents, and tool results, so
+review and redact it before sharing any excerpt publicly.
 
 Extension diagnostics should be equally disciplined. Log an event name, safe
 IDs, timing, and sanitized state—not API keys, auth headers, complete provider
@@ -127,7 +131,7 @@ Pi has several retry-like mechanisms with different ownership:
 | Failure/condition | Owner | Typical action |
 |---|---|---|
 | Invalid tool input or tool execution error | Agent loop/model | Return error tool result; model may recover |
-| Transport/provider transient error | AgentSession/provider settings | Retry according configured policy |
+| Transport/provider transient error | AgentSession/provider settings | Retry according to configured policy |
 | Context overflow | AgentSession compaction policy | Compact and retry if applicable |
 | User abort | Active run abort controller | Stop abort-aware work; do not auto-retry blindly |
 | Extension hook error | Extension runner | Log; tool-call errors fail safe by blocking |
@@ -140,8 +144,9 @@ correct model arguments; compacting a missing API key is pointless.
 
 The repository is large enough that broad search results can mislead. A useful
 sequence is to find a public symbol with `rg`, read its contract and focused
-call sites, identify the package boundary crossed, and then read a nearby test
-or example. Change one boundary at a time and add a regression where needed.
+call sites, identify which package owns the next step, and then read a nearby
+test or example. Change one subsystem at a time and add a regression where
+needed.
 
 Examples are valuable for extensions. Start with
 `packages/coding-agent/examples/extensions/hello.ts`, then choose a focused
@@ -150,11 +155,11 @@ or `custom-provider-*` instead of copying a large multi-feature extension.
 
 ## Git hygiene in a shared worktree
 
-The repository may have concurrent sessions changing unrelated files. Stage
-only explicit paths you changed; never use broad staging commands. Inspect
-`git status` before staging/committing, and do not reset, clean, stash, or
-checkout unrelated work. The project rules also prohibit commits unless the
-user asks.
+Multiple concurrent agent sessions may edit different files in the same
+working tree. Stage only explicit paths you changed in your session; never
+use broad staging commands. Inspect `git status` before staging/committing,
+and do not reset, clean, stash, or check out unrelated work. `AGENTS.md` also
+prohibits commits unless the user asks.
 
 For generated model metadata, change the generator source rather than editing
 `packages/ai/src/models.generated.ts` by hand. That policy preserves the link
@@ -169,7 +174,7 @@ the same review questions as implementation:
 2. Does the example respect actual async/cancellation semantics?
 3. Does a lifecycle claim match the runner/agent implementation?
 4. Does a configuration example state merge/replace/trust semantics?
-5. Does a visual description name the actual renderer/component boundary?
+5. Does a visual description name the responsible renderer or component?
 
 When an API changes, update its focused chapter and the prompt lifecycle
 chapter together. The lifecycle is the integration test for the book: it
@@ -187,5 +192,5 @@ Before requesting review for a code or extension change:
 6. Test cancellation, error, and reload/replacement paths where relevant.
 7. Inspect diffs for generated/lockfile/dependency changes you did not intend.
 
-This workflow makes Pi's extension power manageable: every change is tied to a
-specific runtime boundary and an evidence-producing validation path.
+This workflow keeps extension changes reviewable: each change has a clear
+runtime owner and a validation step that produces concrete evidence.

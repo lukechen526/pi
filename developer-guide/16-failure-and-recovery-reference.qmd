@@ -1,8 +1,9 @@
-# Failure and recovery reference
+# Failure and recovery reference {#sec:failure}
 
 Pi turns many failures into explicit protocol data instead of allowing an
-exception to escape through every layer. This reference connects symptoms to
-the layer that owns recovery. Use it during debugging and extension design.
+exception to escape through every layer. This operational reference is for
+extension authors and contributors debugging failures or designing recovery;
+it is a symptom-to-owner lookup, not a step-by-step tutorial.
 
 ## Failure flow by runtime layer
 
@@ -25,37 +26,45 @@ rendering failure
   -> fallback renderer or interactive diagnostic path
 ```
 
-The different outcomes are intentional. A provider failure means there is no
-trusted assistant result to continue from. A tool failure is part of an
-assistant turn and is often useful information for the model's next request.
+Each outcome keeps recovery at the layer that can still make a safe decision.
+Startup rejects or ignores invalid configuration because no reliable runtime
+exists yet. A provider failure becomes a terminal assistant message because
+there is no trusted assistant result to continue from, while a tool failure
+becomes a `ToolResultMessage` because it is useful input to the model's next
+request. An extension hook fails closed where it controls an operation so a
+broken policy hook cannot accidentally allow that operation. Rendering alone
+falls back because presentation failure should not discard otherwise valid
+result data.
 
 ## Startup and configuration failures
 
 | Symptom | Owning layer | Expected behavior | First recovery action |
 |---|---|---|---|
-| Malformed `settings.json` or `models.json` | Settings/model registry | Diagnostic/load error; built-ins remain available where possible | Correct JSON; inspect reported scope/path |
+| Malformed `settings.json` (global `~/.pi/agent/settings.json` or project `.pi/settings.json`) or `models.json` | Settings/model registry | Diagnostic/load error; built-ins remain available where possible | Correct JSON; inspect reported scope/path |
 | Project extension unavailable | Trust/resource loader | Project resources ignored when untrusted | Save/override trust intentionally, then restart/reload |
-| Extension factory fails | Resource loader/application | Startup diagnostics; Pi suggests retry without extensions | Run with `-ne` or `-e` to isolate path/import failure |
+| Extension factory fails | Resource loader/application | Startup diagnostics; Pi suggests retry without extensions | Run with `--no-extensions`/`-ne` (or load a single path via `--extension`/`-e`) to isolate path/import failure |
 | No model selected | Session setup | Prompt is rejected before agent loop | Configure/choose model and auth |
 | Auth missing | Model registry/session | Prompt is rejected with provider guidance | `/login`, configure key, or select authenticated model |
 
 Do not work around a trust failure by making a global extension read an
 untrusted project's configuration. That moves a deliberate security boundary
-into unreviewed custom code.
+into code outside Pi's trust boundary, on an uncontrolled path.
 
 ## Provider failures
 
-Provider adapters report normal failure/abort outcomes through the assistant
-stream contract. `Agent.runWithLifecycle()` also converts unexpected throws to
-a final assistant message with `stopReason: "error"` or `"aborted"`, followed
-by turn/agent end events. The transcript and extensions therefore see a normal
-terminal event sequence even when the network fails.
+Provider adapters report normal failure/abort outcomes as final assistant
+messages on the stream rather than as raw exceptions. `Agent.runWithLifecycle()`
+also converts unexpected throws to a final assistant message whose
+`stopReason` is `error` or `aborted`, followed by turn/agent end events. The
+transcript and extensions therefore see a normal terminal event sequence even
+when the network fails.
 
 `AgentSession` evaluates the final assistant message. Depending on settings and
-error classification it may prepare an agent-level retry, auto-compact/retry
-after an overflow, or settle. Provider SDK retries and agent-level retries are
-separate knobs; an excessively long provider retry can hide useful control from
-the agent/session layer.
+error classification, it may prepare an agent-level retry, auto-compact and
+retry after an overflow, or finish automatic recovery and emit
+`agent_settled`. Provider SDK retries and agent-level retries are separate
+knobs; an excessively long provider retry can delay agent/session-layer
+retry, compaction, or settle decisions until the provider layer finishes.
 
 For an extension, the correct response to an `agent_end` error is normally to
 observe/report it, not to immediately create another competing prompt. Use
@@ -70,16 +79,18 @@ Tool processing has several failure points:
 |---|---|
 | Tool name is not active/found | Error result naming the missing tool |
 | `prepareArguments` or schema validation fails | Error result containing the failure reason |
-| `tool_call` returns block | Error result with block reason |
+| `tool_call` policy denies/blocks the call | Error result with the deny/block reason |
 | Tool execute throws | Error result with thrown error text |
 | Abort occurs before/during work | Error result indicating cancellation |
 | `tool_result` hook throws | Error result rather than a malformed patched result |
 
-The loop emits a tool-result message after finalization. A model can inspect
-the result, modify its arguments, call another tool, or explain the failure.
+The loop emits a tool-result message after execution and `tool_result` hooks
+finish (successful or error-path finalization). A model can inspect the result,
+modify its arguments, call another tool, or explain the failure.
 Make tool error strings actionable: include an invalid path, missing exact
-text, exit code, timeout, or next command when safe. Do not expose secrets in
-a tool error just because the model can read it.
+text, exit code, timeout, or next command when safe. Do not put credentials
+or other secret values in a tool error message; the model and transcript both
+receive that text.
 
 ## Cancellation versus timeout
 
@@ -100,9 +111,16 @@ than leaving a detached process behind.
 ## Recovery after compaction and tree movement
 
 Compaction/retry is recovery from context pressure, not from every provider
-error. A custom compaction extension must return a summary tied to the
-preparation's `firstKeptEntryId` and token count; an arbitrary summary string
-without this boundary cannot correctly rebuild session context.
+error. `firstKeptEntryId` is the ID of the earliest session entry retained
+verbatim after compaction; entries before it are represented by the summary.
+A custom compaction extension that intercepts `session_before_compact` must
+return a `SessionBeforeCompactResult`. To replace the summary, set `compaction`
+to a `CompactionResult` shaped as
+`{ summary, firstKeptEntryId, tokensBefore, details? }`. To abort compaction,
+return `{ cancel: true }`. To keep the default summary from
+`prepareCompaction`/`compact`, omit `compaction`. Changing or omitting the
+`firstKeptEntryId` boundary can make context rebuilding retain the wrong
+entries or omit the intended ones.
 
 Tree navigation changes the active leaf. An extension that reconstructs state
 from `getEntries()` instead of the active branch may accidentally recover state
@@ -117,9 +135,12 @@ as a diagnostic, not evidence that result data is correct. Inspect the original
 content/details and renderer context, then make the renderer handle partial,
 error, and expanded states explicitly.
 
-For a TUI-only issue, test the same data at a narrow terminal width and with
-the tool output collapsed/expanded. Many apparent rendering failures are width
-or ANSI-visible-width mistakes rather than agent/session failures.
+For a TUI-only issue, replay the same fixture at a narrow width (for example,
+40 columns) and a normal width, then test both collapsed and expanded tool
+output. Narrow width forces wrapping and clipping paths, while toggling output
+exercises both renderer states. A failure that appears only when ANSI-styled
+text wraps usually points to a display-column calculation (escape sequences
+occupy bytes but no visible columns), not to agent or session data.
 
 ## Incident checklist
 
@@ -134,5 +155,8 @@ For a reliable bug report or regression test, record:
 7. Whether Esc/reload/new/resume changes the behavior.
 8. A focused test, session tree sketch, or terminal capture proving the result.
 
-This checklist establishes a factual boundary before a fix is proposed. It is
-the operational counterpart to the source tours in the previous chapter.
+This checklist establishes a factual boundary before a fix is proposed. For
+rendering incidents, pair it with [Tour 5: Follow one streamed token to the
+terminal](#sec:tour-5).
+For compaction or branch-context incidents, use [Tour 9: Trace a resume-context
+discrepancy](#sec:tour-9).

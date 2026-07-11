@@ -1,25 +1,34 @@
-# Customization patterns and contributor workflow
+# Customization patterns and contributor workflow {#sec:customization}
 
 This chapter turns the architecture into decisions. It also calls out the
 mistakes that most often create an extension which appears to work once but
-fails on reload, in parallel tool mode, or outside the interactive terminal.
+fails on reload, in parallel tool mode, or outside the interactive terminals.
 
 ## Configuration before code
 
-Pi configuration is layered. The coding-agent package uses a global agent
-directory (normally `~/.pi/agent`) and project-local `.pi` resources. The
-`piConfig.configDir` package setting makes the config directory rebrandable, so
-extension code should import `CONFIG_DIR_NAME` when constructing a project path
-instead of hardcoding `.pi`.
+Pi configuration is layered. By default, the coding-agent package uses
+`~/.pi/agent` as its global agent directory and `.pi` for project-local
+resources. The `piConfig.configDir` package setting makes the config directory
+rebrandable, so extension code should import `CONFIG_DIR_NAME` when constructing
+a project path instead of hardcoding `.pi`:
+
+```ts
+import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
+
+const projectConfigPath = join(ctx.cwd, CONFIG_DIR_NAME, "my-extension.json");
+```
 
 Use settings for stable choices such as providers, model selection, themes,
 keybindings, trusted packages, and resource locations. Use an extension when a
 choice must react to events, require a tool, retain state, or manipulate UI.
 
-Project configuration and resources are an execution boundary: untrusted
-projects do not load project-local extensions, packages, skills, or related
-dynamic resources. A global extension should call `ctx.isProjectTrusted()`
-before honoring project-local configuration of its own.
+Project configuration and resources are an execution boundary. Before trust is
+resolved, Pi loads only context files plus global and explicitly supplied CLI
+extensions. Approving trust allows protected project settings and resources to
+load; declining trust skips them. Trust is an input-loading decision, not a
+sandbox for subsequent tool execution. A global extension should call
+`ctx.isProjectTrusted()` before honoring project-local configuration of its own.
 
 ## Pattern: a safety gate around a built-in tool
 
@@ -35,6 +44,11 @@ export default function register(pi: ExtensionAPI) {
     if (!isToolCallEventType("bash", event)) return;
     if (!event.input.command.includes("rm -rf")) return;
 
+    // Noninteractive hosts cannot show a dialog; choose a safe default first.
+    if (!ctx.hasUI) {
+      return { block: true, reason: "Dangerous command blocked (no UI for confirmation)" };
+    }
+
     const allowed = await ctx.ui.confirm("Dangerous command", "Allow rm -rf?");
     if (!allowed) return { block: true, reason: "Blocked by user" };
   });
@@ -43,8 +57,9 @@ export default function register(pi: ExtensionAPI) {
 
 The call is already schema-validated when the hook runs. The `isToolCallEventType`
 guard provides a typed `event.input` for a built-in tool. This pattern must
-handle non-TUI modes deliberately: `ctx.hasUI` can be false, so choose a safe
-default or a noninteractive policy rather than assuming a dialog exists.
+handle non-TUI modes deliberately: `ctx.hasUI` can be false, so check it before
+`ctx.ui.confirm()` and choose a safe default or noninteractive policy. The
+shipped `permission-gate.ts` example follows the same order.
 
 Do not mutate a tool's input merely to implement policy when blocking is more
 honest. If you do mutate, remember no second schema validation occurs.
@@ -72,27 +87,68 @@ export default function register(pi: ExtensionAPI) {
 }
 ```
 
+Here, `display: true` shows the injected custom message in the transcript; the
+message is sent to the model whether or not it is displayed.
+
 Multiple handlers see a chained system prompt. Prefer appending a narrow,
 conditional instruction over replacing the entire system prompt; replacement
 can accidentally discard skills, tools, context files, and user-provided
 instructions. For a message-level context transformation before *every*
-provider request, use the `context` event instead.
+provider request, use the `context` event instead; see
+[Chapter 14](#sec:choose-event)
+for when `context` is the right boundary versus prompt-scoped or provider hooks.
 
 ## Pattern: state that survives restart and branching
 
 For state derived from tool actions, put a serializable snapshot in each tool
-result's `details`, then reconstruct from `ctx.sessionManager.getBranch()` in
-`session_start`. A branch sees its own prior results, so it naturally restores
-the state associated with that branch.
+result's `details`. In `session_start`, initialize empty in-memory state. Scan
+`ctx.sessionManager.getBranch()` from root to the current leaf, validate matching
+tool-result entries, and apply their snapshots in order so the last one becomes
+the current state. `getBranch()` excludes sibling-branch entries, so this rebuild
+restores only the state associated with the selected branch. Rebuild on both
+`session_start` and `session_tree` so reload, resume, fork, and `/tree`
+navigation stay consistent:
+
+```ts
+function rebuildState(ctx: ExtensionContext) {
+  state = emptyState();
+  for (const entry of ctx.sessionManager.getBranch()) {
+    if (entry.type !== "message") continue;
+    const msg = entry.message;
+    if (msg.role !== "toolResult" || msg.toolName !== "my_tool") continue;
+    const snapshot = msg.details as MyState | undefined;
+    if (snapshot) state = snapshot;
+  }
+}
+
+pi.on("session_start", async (_event, ctx) => rebuildState(ctx));
+pi.on("session_tree", async (_event, ctx) => rebuildState(ctx));
+```
 
 ```text
 tool result details  -> durable session entry -> branch reload -> extension rebuilds state
 ```
 
+The shipped `todo.ts` extension implements this rebuild loop end to end.
+
 For state that should be visible in the transcript but never sent to the
 model, use `pi.appendEntry("my-state", data)` and
 `pi.registerEntryRenderer("my-state", renderer)`. Do not use `sendMessage`
 for private bookkeeping: custom messages are model context.
+
+For a read-modify-write operation, serialize mutations of the same file while
+leaving different files concurrent. `withFileMutationQueue` is exported from
+`@earendil-works/pi-coding-agent`:
+
+```ts
+import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { readFile, writeFile } from "node:fs/promises";
+
+await withFileMutationQueue(filePath, async () => {
+  const current = await readFile(filePath, "utf8");
+  await writeFile(filePath, update(current));
+});
+```
 
 ## Pattern: dynamic tools and active-tool policy
 
@@ -110,17 +166,61 @@ Changing active tools affects the next turn and rebuilds the system prompt.
 `setActiveTools(["read", "bash"])` is a real policy change, not just a UI
 filter. Use it with a command/shortcut that clearly signals the new mode.
 
+Command handlers receive `ExtensionCommandContext`: an `ExtensionContext` with
+user-initiated session controls such as `newSession`, `fork`, `navigateTree`,
+`switchSession`, `reload`, and `waitForIdle`. Put session replacement or
+navigation in a command handler. A normal event handler can run within the
+active agent loop, while these operations replace contexts and must be
+coordinated from an explicit user command; the old context is stale afterward.
+
+When tools and session behavior are not enough, the next customization boundary
+is the model provider.
+
 ## Pattern: provider customization
 
 Use `pi.registerProvider()` to add a proxy, endpoint, model catalog, OAuth
 flow, or nonstandard stream implementation. Use a provider hook only for a
 small cross-cutting change such as tracing headers or payload inspection.
 
-An async factory is the right location when the provider must query a local
-model service before registration. Pi waits for that factory, then applies
-queued registrations while it creates services. Registering from a later
-command takes effect immediately, but it cannot make the model available to
-earlier startup operations such as model listing.
+An extension factory has the shape `(pi: ExtensionAPI) => void | Promise<void>`.
+Use its async form when the provider must query a local model service before
+registration:
+
+```ts
+import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+
+// Replace with a real local discovery call; shape is what registerProvider expects.
+async function discoverLocalModels() {
+  return [
+    {
+      id: "local-model",
+      name: "Local Model",
+      reasoning: false,
+      input: ["text"] as const,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    },
+  ];
+}
+
+const register: ExtensionFactory = async (pi: ExtensionAPI): Promise<void> => {
+  const models = await discoverLocalModels();
+  pi.registerProvider("local", {
+    baseUrl: "http://localhost:11434/v1",
+    api: "openai-completions",
+    models,
+  });
+};
+
+export default register;
+```
+
+Pi awaits the factory. Provider registrations made during extension loading are
+queued until the model registry is available, then applied before startup
+operations such as model listing continue. Registration from a later command
+takes effect immediately, but it cannot make the model available to startup
+operations that have already completed.
 
 Provider configuration has security impact. Environment-variable references
 for `apiKey` keep secrets out of source. Avoid logging headers, payloads, or
@@ -157,10 +257,12 @@ dependencies. Share a versioned package with explicit `pi` manifest paths when
 the team needs repeatability, rather than copying a large extension into every
 repository.
 
-Use a project package for project-specific behavior only after the team agrees
-to trust that source. Use a global package for behavior that is independent of
-the current project. The scope determines both discovery and the security
-boundary.
+Use a project package for project-specific behavior only after the team trusts
+the project folder (or a saved trusted parent). That decision permits Pi to load
+project settings and resources, install missing packages configured by the
+project, and execute project extensions, including package-managed extensions.
+Use a global package for behavior independent of the current project. The scope
+determines both discovery and the security boundary.
 
 ## Common mistakes and the correct boundary
 
@@ -168,13 +270,13 @@ boundary.
 |---|---|---|
 | Start a file watcher in the extension factory | Factory may run for a non-session command | Start in `session_start`; close in `session_shutdown` |
 | Keep all extension state in a closure | Reload/resume/fork loses it | Rebuild from session entries or tool `details` |
-| Call session replacement from a normal event | It can deadlock and leave stale contexts | Use a command and `ExtensionCommandContext` |
+| Call session replacement from a normal event | It can run inside the active agent loop and leave stale contexts | Use a command and `ExtensionCommandContext` |
 | Use `sendMessage` for private metadata | The model receives it | Use `appendEntry` and an entry renderer |
 | Ignore `AbortSignal` | Esc cannot stop your nested work | Forward `ctx.signal`/tool signal |
 | Mutate files in a custom tool without a queue | Parallel sibling calls can lose writes | Use `withFileMutationQueue` around read-modify-write |
 | Override `read` or `bash` with a different result shape | Built-in UI/session behavior expects details | Preserve the documented built-in contract |
 | Assume tool hooks observe sibling results | Parallel tools finish independently | Persist/coordinate after the batch or avoid the dependency |
-| Assume `agent_end` means completely idle | Retry/compaction/follow-up may still run | Use `agent_settled` or command `waitForIdle()` |
+| Assume `agent_end` means completely idle | `agent_end` marks one agent loop ending; retry, compaction, or a queued continuation may still run | Use `agent_settled`, which fires only after no automatic retry, compaction, or queued continuation remains, or command `waitForIdle()` |
 | Test only `pi -e` | It does not prove discovery/reload behavior | Test from auto-discovery plus `/reload` |
 
 ## A practical verification ladder
@@ -182,7 +284,8 @@ boundary.
 Use evidence appropriate to what you changed:
 
 1. Type-check the extension with the same TypeScript version/API contracts used
-   by Pi, especially tool parameters and event return values.
+   by Pi, especially tool parameters and event return values. From an extension
+   package with a `tsconfig.json`, run `npx tsc --noEmit -p tsconfig.json`.
 2. Load it with `pi -e path/to/extension.ts` to isolate load errors.
 3. Move it to an auto-discovered location and verify `session_start`.
 4. Exercise the happy path and the relevant failure/deny/cancel path.
@@ -196,9 +299,12 @@ Use evidence appropriate to what you changed:
    rather than a real-provider test. The coding-agent suite uses a faux provider
    under `packages/coding-agent/test/suite/harness.ts` for deterministic tests.
 
-The repository ships many extension examples in
-`packages/coding-agent/examples/extensions/`. Read the smallest example that
-matches your need first: `hello.ts` for a tool, `permission-gate.ts` for a gate,
-`input-transform.ts` for input routing, `entry-renderer.ts` for transcript-only
-state, `dynamic-tools.ts` for runtime tool changes, and `subagent/` for a
-larger composition.
+The repository ships extension examples in
+`packages/coding-agent/examples/extensions/`. Start with the smallest match:
+
+- `hello.ts`: a tool
+- `permission-gate.ts`: a safety gate
+- `input-transform.ts`: input routing
+- `entry-renderer.ts`: transcript-only state
+- `dynamic-tools.ts`: runtime tool changes
+- `subagent/`: a larger composition
