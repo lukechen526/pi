@@ -1,0 +1,119 @@
+# Glossary {#sec:glossary}
+
+**Agent**
+
+: The stateful class in `packages/agent` that owns a model, system prompt,
+  messages, active tools, queues, and one active run. A *run* is one continuous
+  loop cycle from a submitted prompt through assistant responses and tool calls
+  until **Steering** and **Follow-up** queues have nothing left to deliver and
+  the agent goes idle.
+
+**AgentSession**
+
+: The wrapper in `packages/coding-agent` around an **Agent**. It preprocesses
+  prompts, coordinates resources, configures tools and the system prompt,
+  bridges extension events, handles retries and **Compaction**, and records
+  events through its **SessionManager**. An **AgentSessionRuntime** owns the
+  live instance.
+
+**AgentSessionRuntime**
+
+: The lifecycle owner of the current **AgentSession** and the cwd-bound service
+  bundle that backs it: settings, **Resource loader**, model registry, and
+  authentication. On new, resume, or fork it shuts down the old session and
+  services for the previous cwd, creates a matching bundle for the destination,
+  and rebinds hosts to the replacement; it does not mutate an existing session
+  into a new identity. See **SessionManager**.
+
+**Assistant message event stream**
+
+: Async stream from `packages/ai` that normalizes provider streaming events into
+  start, deltas, completion, and error states.
+
+**Compaction**
+
+: Summarizing older context into a durable session entry so recent context can
+  fit in a model window. It is not simple transcript deletion.
+
+**Context**
+
+: The provider-facing bundle of system prompt, converted messages, and active
+  tools. It is distinct from the broader persisted session held by a
+  **SessionManager**.
+
+**Extension**
+
+: A runtime-loaded TypeScript/JavaScript factory module that receives
+  `ExtensionAPI` and registers behavior. Loaded by the **Resource loader** under
+  the resolved **Trust policy**.
+
+**Extension context**
+
+: The `ctx` passed to hooks, tools, and commands, containing mode, cwd, UI,
+  session access, and the model registry. Its optional `signal` is an
+  `AbortSignal` during active turn work so nested I/O can cancel with the agent;
+  it is usually `undefined` while idle.
+
+**Follow-up**
+
+: A queued user or custom message delivered only when the current run has no
+  more tool calls or **Steering** messages and would otherwise stop. Use it when
+  the current run should finish first; use **Steering** when new guidance should
+  affect the ongoing run at its next turn boundary.
+
+**JSONL**
+
+: JSON Lines: a text format with one complete JSON value per line. Pi uses it
+  both for append-only session files and to frame JSON-mode and RPC streams.
+
+**Model registry**
+
+: Service in `packages/coding-agent` that knows models, providers,
+  authentication, OAuth, and dynamic provider registration.
+
+**Resource loader**
+
+: Service in `packages/coding-agent` that discovers and loads extensions,
+  skills, prompt templates, themes, context files, and packages according to the
+  resolved **Trust policy** and each resource category's rules. Its results feed
+  **AgentSession** construction, including system-prompt inputs; the usual
+  implementation is reloaded with the rest of the cwd-bound bundle when an
+  **AgentSessionRuntime** replaces a session.
+
+**SessionManager**
+
+: The persistence component used by an **AgentSession**. It stores the session
+  as an append-only **JSONL** tree, tracks the selected leaf and branches, and
+  reconstructs the active model **Context**. An **AgentSessionRuntime**
+  replaces it as part of replacing the current session.
+
+**Steering**
+
+: A queued message injected after the current assistant response and all tool
+  calls from that response finish, but before the next provider request. Use it
+  when new guidance should affect the ongoing run at its next turn boundary; use
+  a **Follow-up** when the current run should finish first.
+
+**Tool**
+
+: A model-callable operation with a TypeBox parameter schema and async execute
+  function. Built-in and extension tools share the agent-loop boundary.
+
+**Tool result**
+
+: A durable message produced by a tool execution. Its content goes to the
+  model; details carry structured metadata for renderers/state.
+
+**Trust policy**
+
+: The startup decision that determines whether project-local configuration and
+  resources may be loaded or executed, including settings, packages,
+  extensions, skills, prompts, and themes. The **Resource loader** applies that
+  decision when discovering project resources. Context files such as
+  `AGENTS.md` are a documented exception and load unless context loading is
+  disabled.
+
+**TUI**
+
+: Terminal user interface. Pi's reusable TUI primitives live in `packages/tui`;
+  `packages/coding-agent` composes them into the interactive application.

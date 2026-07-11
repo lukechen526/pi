@@ -1,4 +1,4 @@
-# Terminal UI and interactive mode
+# Terminal UI and interactive mode {#sec:tui}
 
 Pi's interactive application is built from a reusable terminal UI package and
 a coding-agent-specific composition layer. The separation is worth learning:
@@ -6,8 +6,15 @@ an extension normally customizes the coding-agent UI surface, while a
 contribution to `packages/tui` changes primitives that could serve another
 terminal application.
 
-Relevant files include `packages/tui/src/tui.ts`, `src/terminal.ts`,
-`src/keybindings.ts`, `src/autocomplete.ts`, and
+Use this chapter according to the layer you plan to change. Extension authors
+should focus on editor submission, transcript renderers, and `ctx.ui`;
+coding-agent contributors should follow `InteractiveMode` and session events;
+TUI contributors should focus on terminal lifecycle, components, input, and
+differential rendering.
+
+Relevant files include `packages/tui/src/tui.ts`,
+`packages/tui/src/terminal.ts`, `packages/tui/src/keybindings.ts`,
+`packages/tui/src/autocomplete.ts`, and
 `packages/coding-agent/src/modes/interactive/interactive-mode.ts`.
 
 ## The TUI package owns terminal mechanics
@@ -78,9 +85,9 @@ interactive-mode lifecycle rather than leaving raw terminal state altered.
 
 ## Keyboard input is parsed before it becomes a binding
 
-`keys.ts` parses terminal input into key semantics and `keybindings.ts` maps
-semantic keybinding IDs to user-configurable keys. A binding ID is stable,
-namespaced policy such as:
+`packages/tui/src/keys.ts` parses terminal input into key semantics and
+`packages/tui/src/keybindings.ts` maps semantic keybinding IDs to
+user-configurable keys. A binding ID is stable, namespaced policy such as:
 
 ```text
 tui.input.submit
@@ -98,38 +105,47 @@ between the keybindings file, help text, and actual behavior.
 
 ## Editor submission and queue semantics
 
-The interactive editor is not just a text box. Its submission handler handles:
+The submission outcome comes first: when idle, regular Enter resolves
+`getUserInput()`, whose loop calls `session.prompt(text)`. While the agent is
+streaming, regular Enter sends a steering prompt for the active run, and
+Alt+Enter queues a follow-up prompt for after that run finishes.
+
+The interactive editor is therefore more than a text box. Its submission
+handler also handles:
 
 - built-in slash commands;
 - `!`/`!!` user shell commands;
-- compaction-time message holding;
+- message holding during compaction, which replaces older conversation context
+  with a shorter summary to free context-window space;
 - steering/follow-up delivery while an agent is active;
 - normal queued input for the main `run()` loop;
 - editor history, multiline text, image paste, autocomplete, and external edit.
 
-The high-level outcome is simple: an idle normal submission resolves
-`getUserInput()`, whose loop calls `session.prompt(text)`. While streaming,
-regular Enter sends a steering prompt; Alt+Enter sends a follow-up prompt.
 The detailed handling stays in `InteractiveMode` so `AgentSession` can serve
 print/RPC clients without importing terminal components.
 
 ## Transcript rendering from agent events
 
 `InteractiveMode.subscribeToAgent()` receives coding-agent session events.
-`handleEvent()` dispatches behavior by type:
+`handleEvent()` dispatches behavior by type. In a typical tool-calling turn,
+the first occurrence of each event follows this runtime order:
 
 | Event | UI responsibility |
 |---|---|
 | `agent_start` | Clear pending tool bookkeeping and begin activity state |
-| `message_start` | Create/update the appropriate transcript row |
-| `message_update` | Refresh partial assistant/thinking/tool-call display |
-| `message_end` | Finalize transcript component and session-visible output |
-| tool execution events | Create/update/complete a tool row |
-| `turn_end` / `agent_end` | Final activity/footer/pending-message updates |
+| `message_start` | Create the row for a user or assistant message |
+| `message_update` | Refresh the partial assistant, thinking, and tool-call display |
+| `message_end` | Finalize the current message component |
+| `tool_execution_start` | Start or recover the tool row created from the assistant's tool call |
+| `tool_execution_update` | Refresh a streaming partial tool result |
+| `tool_execution_end` | Finalize the tool result and remove it from pending bookkeeping |
+| `agent_end` | Clear activity state and any leftover streaming/tool components |
 
-The UI works from events rather than polling the model. This preserves the
-same visual behavior whether an assistant emits text, thinking, tool calls,
-errors, or a synthetic retry/compaction message.
+After tool execution, `message_start`/`message_end` carry the tool-result
+message, and another assistant turn may repeat the message lifecycle before
+`agent_end`. The UI works from events rather than polling the model. This
+preserves the same visual behavior whether an assistant emits text, thinking,
+tool calls, errors, or a synthetic retry/compaction message.
 
 ## Tools in the transcript
 
@@ -149,8 +165,12 @@ TUI knows how to layout/diff-render the resulting components
 
 For an extension tool, return a compact default component and make details
 available when expanded. For a high-frequency partial result, reuse
-`context.lastComponent` if safe instead of creating a new large component on
-every stream update.
+`context.lastComponent` when it is already the same component class you would
+create and can be updated in place (for example a `Text` you can `setText` on).
+That reuse is the criterion for "safe": same render slot, compatible instance,
+mutations only. Do not cast and mutate an unrelated previous component, and do
+not invent a new large component tree on every stream update when an existing
+instance can carry the change.
 
 ## Extension UI surface
 
@@ -166,10 +186,20 @@ controlled surface rather than direct access to private chat/editor fields:
 | Look and completion | themes, autocomplete provider, custom footer |
 | Complex interaction | `custom(factory)` and experimental overlays |
 
-Use `ctx.hasUI` for methods that require user interaction and `ctx.mode ===
-"tui"` before terminal-only behavior. In print/JSON modes, a dialog cannot
-block for input. In RPC mode, Pi can map some UI operations to protocol events
-but custom terminal components are not an equivalent surface.
+`ctx.mode` identifies the host surface, while `ctx.hasUI` says whether a
+dialog-capable adapter is actually bound:
+
+| `ctx.mode` | Host surface | Normal `ctx.hasUI` behavior |
+|---|---|---|
+| `"tui"` | Interactive terminal | `true`; dialogs and terminal components are available |
+| `"rpc"` | Persistent protocol client | `true`; supported dialogs/notices map to RPC messages |
+| `"json"` | Machine-readable event output | `false`; UI calls use noninteractive no-op/default behavior |
+| `"print"` | One-shot text output | `false`; UI calls use noninteractive no-op/default behavior |
+
+Use `ctx.hasUI` before operations that require a user response. Separately,
+require `ctx.mode === "tui"` for terminal-only behavior such as custom TUI
+components. An RPC UI is dialog-capable, but it is not an equivalent terminal
+component surface.
 
 ## Custom components and focus
 
@@ -179,6 +209,7 @@ callback. The component handles input until it calls `done`.
 
 ```ts
 const answer = await ctx.ui.custom<boolean>((_tui, _theme, keybindings, done) => {
+  // Text(text, paddingX, paddingY): cell padding left/right then top/bottom
   const component = new Text("Enter confirms; Escape cancels", 1, 1);
   component.onKey = (key) => {
     if (keybindings.matches(key, "tui.select.confirm")) done(true);
@@ -248,3 +279,7 @@ When an interactive feature is wrong, isolate its layer:
 The correct fix is usually at the narrowest layer that owns the defect: a tool
 renderer for tool presentation, interactive mode for chat composition, or the
 TUI package for a general terminal layout/input primitive.
+
+For a practical next step, follow [Tour 5: Follow one streamed token to the
+terminal](#sec:tour-5),
+then capture the event/render trace described there while running `./pi-test.sh`.

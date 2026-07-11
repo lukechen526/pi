@@ -1,4 +1,4 @@
-# Extension event and API reference
+# Extension event and API reference {#sec:events}
 
 This chapter is a practical reference for choosing extension hooks. It does not
 replace the source types in `packages/coding-agent/src/core/extensions/types.ts`
@@ -6,11 +6,13 @@ or the exhaustive `packages/coding-agent/docs/extensions.md`; use those when
 writing code. Its goal is to make event choice, return value, context, and
 lifecycle safety explicit before implementation.
 
-## Choose an event by the representation you need
+## Choose an event by the representation you need {#sec:choose-event}
 
 The same user action appears in several representations. Select the latest
 boundary that still contains the information you need, because later hooks are
-more specific and less likely to disturb unrelated behavior.
+more specific and less likely to disturb unrelated behavior. The rows below
+follow the normal prompt/turn pipeline from submitted text to tool output;
+`user_bash` and durable session operations are separate paths shown last.
 
 | Need to inspect/change | Event/API | Representation |
 |---|---|---|
@@ -21,14 +23,20 @@ more specific and less likely to disturb unrelated behavior.
 | Provider wire payload | `before_provider_request` | Adapter-specific payload |
 | Provider status/response headers | `after_provider_response` | HTTP metadata before stream consumption |
 | Validated tool arguments | `tool_call` | Tool name and mutable input |
-| Tool execution output | `tool_result` | Content/details/error patch opportunity |
+| Streaming/final tool execution row | `tool_execution_start` / `_update` / `_end` | Observation-only lifecycle payloads |
+| Tool execution output (patchable) | `tool_result` | Content/details/`isError` patch opportunity |
+| Final tool transcript message | `message_start` / `message_end` with `role: "toolResult"` | Durable tool-result message after patching |
 | User typed `!` command | `user_bash` | User command and context-exclusion choice |
-| Durable session operation | Session events or command context | Session metadata/tree/replacement methods |
+| Cancel or customize compaction | `session_before_compact` | Prep metadata; may cancel or supply summary |
+| Observe completed compaction | `session_compact` | Saved compaction entry and source flags |
+| Cancel or summarize tree navigation | `session_before_tree` | Branch preparation; may cancel or supply summary |
+| Observe tree navigation | `session_tree` | New leaf, old leaf, and summary outcome |
+| Initiate session replacement from an extension | Command context (`newSession`, `fork`, `navigateTree`, `switchSession`, `reload`) | User-triggered only; not ordinary event handlers |
 
 The rows describe different capabilities, not aliases. For example, a context
-filter cannot reliably rewrite a provider's serialized protocol payload, and a
-provider hook cannot alter Pi's own system-prompt string reported to other
-extensions.
+filter changes Pi's model-message view, whereas provider hooks operate only at
+the serialized request boundary. Durable session hooks change neither unless
+their operation rebuilds the active context.
 
 ## Startup and trust events
 
@@ -77,23 +85,84 @@ ownership explicit.
 These are cancellation gates. A switch handler sees whether the operation is
 `new` or `resume` plus an optional target path. A fork handler sees entry ID and
 position (`before` for fork or `at` for clone). Return `{ cancel: true }` to
-block a user action after a confirmation/policy check.
+block a user action after a confirmation or policy check:
 
-Do not call a session-changing method from this ordinary event handler. If an
-extension must initiate a switch, use a command handler with command-context
-APIs described later in this chapter.
+```ts
+pi.on("session_before_switch", async (event, ctx) => {
+  if (!ctx.hasUI) return;
+  const ok = await ctx.ui.confirm(
+    "Change session?",
+    event.reason === "new" ? "Start a new session?" : "Open another session?",
+  );
+  if (!ok) return { cancel: true };
+});
+```
+
+Do not call session-changing methods such as `newSession`, `fork`,
+`navigateTree`, `switchSession`, or `reload` from an ordinary event handler.
+If an extension must initiate one, use a command handler with the
+command-context APIs described later in this chapter.
 
 ### Compaction and tree hooks
 
-`session_before_compact` can cancel compaction or return a custom summary plus
-the required kept-entry/token metadata. `session_compact` observes the durable
-result and whether it came from an extension. `session_before_tree` can cancel
-or provide a branch summary; `session_tree` observes the selected leaf and
-summary outcome.
+Compaction replaces older messages on the active branch in model context with
+a durable summary while retaining a recent suffix; it does not delete the
+underlying session entries. `session_before_compact` can cancel that operation
+or return a custom summary plus the required kept-entry/token metadata.
+`session_compact` observes the durable result and whether it came from an
+extension.
 
-Use these hooks for policy/summary customization. Use `context` if the goal is
-only to hide/filter data for a provider call; a context hook does not change the
-durable compaction/tree semantics.
+```ts
+pi.on("session_before_compact", async (event, ctx) => {
+  const { preparation, reason, willRetry } = event;
+  // reason: "manual" | "threshold" | "overflow"
+  // willRetry is true for overflow recovery that retries the aborted turn.
+
+  if (reason === "manual" && !ctx.hasUI) {
+    return { cancel: true };
+  }
+
+  return {
+    compaction: {
+      summary: `Kept from ${preparation.firstKeptEntryId}`,
+      firstKeptEntryId: preparation.firstKeptEntryId,
+      tokensBefore: preparation.tokensBefore,
+    },
+  };
+});
+
+pi.on("session_compact", (event) => {
+  // event.compactionEntry, event.fromExtension, event.reason, event.willRetry
+});
+```
+
+A session is a tree of durable entries linked by `id` and `parentId`; the
+current leaf selects the root-to-leaf branch used for context. `/tree`
+navigation moves that leaf within the same session file and may summarize the
+branch being left. `session_before_tree` can cancel or provide that branch
+summary; `session_tree` observes the selected leaf and summary outcome.
+
+```ts
+pi.on("session_before_tree", async (event) => {
+  const { preparation } = event;
+  // Summary is only used when the user requested one for this navigation.
+  if (!preparation.userWantsSummary) return;
+  return {
+    summary: {
+      summary: `Leaving ${preparation.oldLeafId} for ${preparation.targetId}`,
+      details: {},
+    },
+  };
+});
+
+pi.on("session_tree", (event) => {
+  // event.newLeafId, event.oldLeafId, event.summaryEntry, event.fromExtension
+});
+```
+
+Use these hooks for policy or summary customization. Use `context` if the goal
+is only to hide/filter data for one provider call; a context hook does not
+change durable compaction or tree state.
 
 ### Session information
 
@@ -131,27 +200,36 @@ tools, snippets/guidelines, cwd, context files, and skills. Treat it as
 sensitive extension-local data. It may contain full instructions that should
 not be copied into command descriptions or telemetry.
 
-### `agent_start`, `agent_end`, and `agent_settled`
+### `agent_start`, `agent_end`, and `agent_settled` {#sec:agent-events}
 
-`agent_start` and `agent_end` correspond to one low-level agent loop. The end
-does not prove application idleness: coding-agent may retry, compact/retry, or
-start queued continuations. `agent_settled` means no such automatic work
-remains. Use settled for a status integration that must not clear itself too
-early.
+A low-level agent run begins at `agent_start`, contains one or more turns, and
+ends at `agent_end`. That end does not prove application idleness: coding-agent
+may start another run for an automatic retry, compact-and-retry recovery, or a
+queued continuation. `agent_settled` fires only when that outer processing
+cycle has no automatic work left. Use settled for a status integration that
+must not clear itself between runs.
 
 ### `turn_start`, `turn_end`, and messages
 
-A turn is one assistant response plus its tool calls/results. `turn_end`
-includes the assistant message and final tool results. Message events give
-fine-grained lifecycle: user/assistant/tool-result messages emit start/end;
-assistant streaming also emits update events. `message_end` can replace the
-finalized message while preserving its role.
+Within a run, each turn is one LLM request and assistant response plus the tool
+calls/results produced by that response. If tools run and the agent continues,
+the next provider call is another turn in the same run. `turn_end` includes the
+assistant message and final tool results. Message events give fine-grained
+lifecycle: user/assistant/tool-result messages emit start/end; assistant
+streaming also emits update events. `message_end` can replace the finalized
+message while preserving its role.
 
 Message replacement is powerful. Preserve required fields and do not change a
 role merely to repurpose a transcript; provider conversion and session logic
 rely on role semantics.
 
 ## Provider events
+
+These hooks are protocol boundaries, not portable message APIs. The payload is
+`unknown`, its shape varies by adapter, and payload rewrites are not reflected
+by `ctx.getSystemPrompt()`. Guard payload logic by provider/model, test it
+against that provider's exact wire protocol, and avoid logging bodies or
+headers without redacting prompts, credentials, and provider metadata.
 
 ### `before_provider_headers`
 
@@ -165,14 +243,10 @@ that behavior.
 
 ### `before_provider_request`
 
-This sees the adapter-specific payload after Pi has converted context/system
-prompt/tools. Return `undefined` to keep it or another value to replace it for
-later handlers and the actual request. The event is suitable for a narrow
+This sees the adapter-specific payload after Pi has converted context, system
+prompt, and tools. Return `undefined` to keep it or another value to replace it
+for later handlers and the actual request. Use it only for a narrow
 serialization compatibility patch or a sanitized development trace.
-
-Because it is provider-specific, code here is coupled to API type. Guard logic
-by model/provider when necessary, avoid assuming every adapter uses the same
-JSON shape, and test against the provider's expected protocol.
 
 ### `after_provider_response`
 
@@ -183,16 +257,31 @@ not an extension failure.
 
 ## Tool events and parallelism
 
-`tool_execution_start`, `tool_execution_update`, and `tool_execution_end`
-describe the execution row. `tool_call` is the mutable/blocking policy hook.
-`tool_result` is the result-patching hook. The default parallel execution order
-is subtle:
+The tool execution path separates observation, policy, and patching:
+
+| Event | Role | Handler may |
+|---|---|---|
+| `tool_execution_start` | Observation: tool is about to run | Read `toolCallId`, `toolName`, `args` |
+| `tool_call` | Policy gate after validation | Mutate `event.input` in place, or return `{ block: true, reason? }` |
+| `tool_execution_update` | Observation: partial/streaming output | Read `partialResult` |
+| `tool_result` | Result-patching middleware | Return partial `{ content?, details?, isError? }` |
+| `tool_execution_end` | Observation: finalized execute result | Read `result` and `isError` |
+
+`tool_execution_*` handlers are observation-only: they do not cancel execution
+or rewrite output. Do not confuse the extension event `tool_result` with
+`toolResult` messages. `tool_result` is an extension hook that can patch the
+result before it is committed (`content`, `details`, and/or `isError`; omitted
+fields keep their current values). A `toolResult` message is the durable
+transcript entry (`role: "toolResult"`) that appears later as
+`message_start`/`message_end` and in the session file.
+
+The default parallel execution order is subtle:
 
 ```text
-source-order starts and preflight
-  -> concurrent execute/update
-  -> completion-order tool_result/end
-  -> source-order final toolResult messages
+source-order tool_execution_start and tool_call preflight
+  -> concurrent execute / tool_execution_update
+  -> completion-order tool_result then tool_execution_end
+  -> source-order final toolResult messages (message_start / message_end)
 ```
 
 Therefore, a `tool_call` handler sees session state synchronized through the
@@ -208,9 +297,27 @@ pi.on("tool_call", (event) => {
 });
 ```
 
-For a custom tool, export its `Static<typeof schema>` input and supply explicit
-generic parameters to the guard. Direct `event.toolName === name` narrowing is
-not sufficient because arbitrary custom names overlap built-in literals.
+For a custom tool, derive the TypeBox input type with `Static` from the
+`typebox` package (a direct dependency of coding-agent; not re-exported from
+`@earendil-works/pi-coding-agent`) and supply explicit generic parameters to the
+guard:
+
+```ts
+import { Type, type Static } from "typebox";
+import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
+
+const myToolSchema = Type.Object({ action: Type.String() });
+export type MyToolInput = Static<typeof myToolSchema>;
+
+pi.on("tool_call", (event) => {
+  if (isToolCallEventType<"my_tool", MyToolInput>("my_tool", event)) {
+    // event.input.action is typed
+  }
+});
+```
+
+Direct `event.toolName === name` narrowing is not sufficient because arbitrary
+custom names overlap built-in literals.
 
 ## Extension context reference
 
@@ -230,8 +337,9 @@ All handlers receive a context with these recurring values:
 | `getSystemPrompt` | Current Pi system-prompt string at this lifecycle point |
 
 The scope of `signal` is important. A command handler executed while idle does
-not receive an active turn signal. A `tool_result` handler usually does. Pass it
-to nested asynchronous work only when it is defined and relevant.
+not receive an active turn signal. A `tool_result` handler usually does
+(`ctx.signal` is the abort signal for that work). Pass it to nested
+asynchronous work only when it is defined and relevant.
 
 ## Command context reference
 
@@ -265,6 +373,34 @@ cleanup, and captured old session objects will throw or represent old state.
 | `appendEntry` | Durable data should not affect LLM context | You need model-visible instructions |
 | `registerProvider` | Endpoint/models/auth/streaming change | A header-only trace is enough |
 
+## Model-facing output truncation
+
+Custom tool output is not truncated automatically. Apply `truncateHead` to
+file/search-style output or `truncateTail` to logs and command output. Their
+shared defaults, from `DEFAULT_MAX_LINES` / `DEFAULT_MAX_BYTES` in
+`packages/coding-agent/src/core/tools/truncate.ts`, are 2,000 lines and 50 KB
+(`50 * 1024` bytes), whichever is reached first:
+
+```ts
+import { formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
+
+const clipped = truncateHead(output);
+let text = clipped.content;
+if (clipped.truncated) {
+  text += `\n\n[Output truncated: ${clipped.outputLines} of ${clipped.totalLines} lines`;
+  text += `; ${formatSize(clipped.outputBytes)} of ${formatSize(clipped.totalBytes)}.`;
+  text += " Re-run with a narrower range.]";
+}
+```
+
+A truncation marker must say what was retained and how to retrieve the rest:
+provide an offset/narrower-query instruction, or save the full output to a temp
+file when retaining it is safe and include that path. If individual lines can
+be enormous, pre-truncate them with `truncateLine` (which limits characters)
+or provide specialized handling; `truncateHead` returns no partial first line
+when that line alone exceeds its byte limit. Document limits in the tool
+description.
+
 ## Safety rules for extension authors
 
 1. Start background resources in `session_start`, clean them in
@@ -273,7 +409,7 @@ cleanup, and captured old session objects will throw or represent old state.
    otherwise.
 3. Forward cancellation signals.
 4. Serialize file mutations with the shared queue.
-5. Truncate model-facing output.
+5. Truncate model-facing output explicitly and make continuation actionable.
 6. Use mode/hasUI guards for user prompts and custom components.
 7. Reconstruct persistent state from session entries.
 8. Use fresh context after session replacement/reload.

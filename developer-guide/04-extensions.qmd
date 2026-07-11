@@ -1,0 +1,533 @@
+# Extensions: change Pi without forking it {#sec:extensions}
+
+An extension is a TypeScript or JavaScript module that Pi loads at runtime with
+`jiti`. Jiti resolves the module and transpiles TypeScript syntax on demand, so
+an extension does not need a separate build step; it does not bundle or
+type-check the code. The module's default export is a factory receiving
+`ExtensionAPI`. The factory registers hooks, tools, commands, shortcuts, flags,
+renderers, and providers, which Pi invokes at defined lifecycle boundaries.
+
+Extensions execute with the permissions of the Pi process. They are trusted
+code, not a sandbox. Review a package before installing it and treat an
+extension's filesystem, process, network, and credential access as you would a
+normal local program.
+
+## Choose the right customization mechanism
+
+Before writing code, use the smallest mechanism that owns the behavior:
+
+| Need | Prefer |
+|---|---|
+| Persist an instruction for an AI model or reusable task procedure | [`AGENTS.md`](#sec:context-files), a skill, or a prompt template |
+| Change colors and visual style | Theme |
+| Change AI model/provider selection or static behavior | Settings or a custom provider |
+| Add a command, tool, lifecycle gate, state, custom UI, or request hook | Extension |
+| Reuse Pi from another Node program | Coding-agent SDK (`createAgentSession`) |
+| Change generic loop/provider/TUI behavior for every consumer | Core contribution in the owning package |
+
+An extension is powerful, but do not use one to recreate or patch Pi internals
+as an unreviewed fork. Favor public `ExtensionAPI` methods over importing
+coding-agent internals.
+
+## Discovery, trust, and loading
+
+Pi automatically discovers a single-file extension or directory `index.ts` in
+these places:
+
+| Scope | Files discovered |
+|---|---|
+| Global | `~/.pi/agent/extensions/*.ts`, `~/.pi/agent/extensions/*/index.ts` |
+| Project | `.pi/extensions/*.ts`, `.pi/extensions/*/index.ts` |
+
+Project-local resources are loaded only after the project is trusted. You can
+also add local paths in `settings.json`, or try a path for one invocation with
+`pi -e ./path/to/extension.ts`. The latter is ideal for a quick test, but
+`/reload` hot reload is intended for auto-discovered locations.
+
+At startup, the resource loader loads extension factories before session start.
+An async factory is awaited before startup continues. That makes it suitable
+for one-time initialization such as discovering available AI models and calling
+`pi.registerProvider()`. Do not start timers, watchers, processes, or sockets
+in the factory. For example, this command loads extension factories to discover
+available AI models from providers but does not start a session:
+
+```bash
+pi --list-models
+```
+
+Start long-lived session resources in `session_start` and close them
+idempotently in `session_shutdown`.
+
+## The lifecycle you can rely on
+
+```text
+factory runs
+  -> project_trust (eligible global/CLI extensions only)
+  -> session_start
+  -> resources_discover
+
+prompt
+  -> extension commands, then input
+  -> before_agent_start -> agent_start
+  -> for each AI model/tool turn:
+       turn_start -> context -> provider hooks -> streamed messages
+       -> tool execution hooks -> turn_end
+  -> agent_end -> agent_settled
+
+reload/switch/fork/quit -> session_shutdown
+```
+
+**Figure 4.1 — Representative extension event flow (not exhaustive).**
+
+The diagram omits message-level events and detailed branches for session
+operations; the table below includes some representative events omitted from
+the diagram. For the complete event sequence, return values, and parallel-tool
+ordering, see `packages/coding-agent/docs/extensions.md`; use
+`packages/coding-agent/src/core/extensions/types.ts` for the exact types.
+
+### Event groups and common use
+
+| Event group | Representative events | Use it for |
+|---|---|---|
+| Trust/resources | `project_trust`, `resources_discover` | Decide project trust or contribute paths for skills/prompts/themes |
+| Session | `session_start`, `session_shutdown`, `session_before_switch`, `session_before_compact` | Initialize/clean resources, persist/rebuild state, gate a session operation |
+| Input/agent | `input`, `before_agent_start`, `agent_start`, `agent_end`, `agent_settled` | Transform input, add prompt context, track the true idle state |
+| Turn/messages | `turn_start`, `context`, `message_update`, `turn_end` | Adjust context or render/measure streaming activity |
+| Provider | `before_provider_headers`, `before_provider_request`, `after_provider_response` | Tracing, a request rewrite, response metadata |
+| Tool | `tool_execution_start`, `tool_call`, `tool_execution_update`, `tool_result`, `tool_execution_end` | Observe progress, block/mutate calls, patch results |
+| AI model | `model_select`, `thinking_level_select` | Update UI/state for the selected AI model |
+| User shell | `user_bash` | Route `!` and `!!` through a different execution backend |
+
+`tool_call` is a policy enforcement point: it runs after schema validation and
+can block a tool.
+
+Its input is mutable. A change affects execution and is visible to later
+`tool_call` handlers. **Pi does not revalidate input after a handler mutates
+it.** Keep mutations narrow and validate every invariant your change could
+violate.
+
+`context` receives a deep copy of messages that an extension may replace. It
+is a safer place to prune/inject LLM context than modifying session storage.
+`before_provider_request` is lower-level still: it sees the provider-specific
+payload after serialization, so changes there are not reflected by
+`ctx.getSystemPrompt()`.
+
+## A complete first extension
+
+This extension adds a `hello` tool callable by an AI model, a `/hello-pi`
+command, and a startup notification. It intentionally has no dependencies beyond Pi's bundled
+extension APIs.
+
+1. Create the file in an auto-discovered global location:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+```
+
+2. Save this as `~/.pi/agent/extensions/hello-pi.ts`:
+
+```ts
+import { Type } from "@earendil-works/pi-ai";
+import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+const helloTool = defineTool({
+  name: "hello",
+  label: "Hello",
+  description: "Greet a person by name",
+  parameters: Type.Object({
+    name: Type.String({ description: "The person to greet" }),
+  }),
+  async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+    return {
+      content: [{ type: "text", text: `Hello, ${params.name}!` }],
+      details: { greeted: params.name },
+    };
+  },
+});
+
+export default function register(pi: ExtensionAPI) {
+  pi.registerTool(helloTool);
+
+  pi.registerCommand("hello-pi", {
+    description: "Show a greeting notification",
+    handler: async (args, ctx) => {
+      ctx.ui.notify(`Hello, ${args || "world"}!`, "info");
+    },
+  });
+
+  pi.on("session_start", async (_event, ctx) => {
+    ctx.ui.notify("hello-pi extension is ready", "info");
+  });
+}
+```
+
+The tool definition uses `defineTool`, as does the repository's verified
+`packages/coding-agent/examples/extensions/hello.ts`. `Type.Object` is a
+runtime schema. `defineTool` derives the static type of `params`, and the agent
+loop validates AI-model-supplied arguments against that schema before calling
+`execute`.
+
+3. Start Pi in any project. The startup notification confirms discovery.
+   Run `/hello-pi Ada` to exercise the command. Ask Pi to greet Ada with the
+   `hello` tool, or inspect its active tool list, to exercise the interface
+   exposed to the AI model.
+
+4. Test as a user: edit the discovered file and run `/reload` in Pi. That path
+   emits `session_shutdown`, reloads resources, then emits `session_start` with
+   `reason: "reload"`.
+
+   Separate rule for extension authors: if a *command handler* itself calls
+   `ctx.reload()`, end the handler there. Reloading tears down the current
+   runtime and spins up a new one, but the old `await` resumes in the pre-reload
+   call frame with the old `ctx` and closed-over state:
+
+   ```ts
+   // Author responsibility: do not resume work on the pre-reload instance.
+   await ctx.reload();
+   return;
+   ```
+
+   Put any post-reload behavior in the newly loaded factory (for example a
+   `session_start` handler), not after `await ctx.reload()`.
+
+For a one-off test outside discovery, use `pi -e ~/.pi/agent/extensions/hello-pi.ts`.
+The global file is preferable when testing `/reload`.
+
+## What `ExtensionAPI` and context provide
+
+`ExtensionAPI` is the registration/control surface. Its important methods are:
+
+| API | Purpose |
+|---|---|
+| `pi.on()` | Subscribe to a typed lifecycle event |
+| `pi.registerTool()` | Add or override a model-callable tool |
+| `pi.registerCommand()` | Add `/name` command with optional argument completion |
+| `pi.registerShortcut()` / `pi.registerFlag()` | Add a keybinding action or CLI option |
+| `pi.sendMessage()` / `pi.sendUserMessage()` | Put a custom or user message into agent flow |
+| `pi.appendEntry()` | Persist extension-only session data outside LLM context |
+| `pi.registerMessageRenderer()` / `pi.registerEntryRenderer()` | Render custom message/entry types in the transcript |
+| `pi.getActiveTools()` / `pi.setActiveTools()` | Inspect or change the currently exposed tool set |
+| `pi.setModel()` / `pi.setThinkingLevel()` | Change live session AI-model settings |
+| `pi.registerProvider()` / `pi.unregisterProvider()` | Register an endpoint/provider for AI models at runtime |
+| `pi.exec()` | Run a process with Pi's helper interface |
+
+Handlers receive a context. The most useful fields are `ctx.cwd`, `ctx.mode`,
+`ctx.hasUI`, `ctx.sessionManager`, `ctx.modelRegistry`, `ctx.model`, `ctx.signal`,
+and `ctx.ui`. Pass `ctx.signal` to cancelable nested work. Check
+`ctx.mode === "tui"` for terminal-only behavior and `ctx.hasUI` before prompting.
+
+`ExtensionCommandContext` adds session-changing methods such as `newSession`,
+`fork`, `navigateTree`, `switchSession`, `waitForIdle`, and `reload`. They are
+available only in command handlers because changing a session from an ordinary
+event handler can deadlock or leave stale state.
+
+## Tools: make the contract for the AI model explicit
+
+A custom tool needs a unique `name`, human-facing `label`, description for the
+AI model, TypeBox `parameters`, and `execute`. The return `content` goes
+to the LLM; `details` is structured metadata for renderers and state recovery.
+
+Add `promptSnippet` when the tool should have a one-line entry in Pi's default
+system prompt. Add `promptGuidelines` as instructions for the AI model while
+the tool is active. Each guideline must name its tool because Pi flattens all active tool
+guidelines into one section: write `Use hello when the user asks for a greeting,`
+not `Use this tool when the user asks for a greeting.`
+
+For robust tools:
+
+- Throw from `execute` to report an error to the model.
+- Forward `signal` into `fetch`, process helpers, and long computations.
+- Use `onUpdate` for incremental result rendering.
+- Truncate large output with the exported truncation helpers; built-in limits
+  are 50 KB or 2,000 lines.
+- For string enums exposed to Google-compatible APIs, see
+  [StringEnum vs Type.Union](#stringenum-vs-typeunion-for-string-literals).
+- Use `withFileMutationQueue(absolutePath, callback)` around the *entire*
+  read-modify-write window for a file-mutating tool.
+
+An extension may override a built-in tool by registering the same name. That is
+an advanced compatibility commitment: preserve the built-in result `details`
+shape expected by session and UI code. If the override omits a renderer, Pi can
+reuse the built-in renderer slot, but prompt metadata is not inherited.
+
+## Understanding TypeBox schemas for tool parameters
+
+A TypeBox schema validates model-supplied arguments at runtime and generates
+the JSON Schema sent to the provider. A runtime schema is therefore required
+even when TypeScript already knows the parameter types.
+
+### Common schema patterns
+
+```ts
+import { Type } from "@earendil-works/pi-ai";
+
+// Required string parameter
+Type.String({ description: "A description helps the model use it correctly" })
+
+// Optional number
+Type.Optional(Type.Number({ description: "Count in seconds" }))
+
+// Required object with typed properties
+Type.Object({
+  path: Type.String({ description: "File path" }),
+  recursive: Type.Optional(Type.Boolean({ default: false })),
+})
+
+// String enum (use StringEnum for Google-compatible APIs)
+import { StringEnum } from "@earendil-works/pi-ai";
+StringEnum(["small", "medium", "large"], { description: "Size" })
+```
+
+### How to think about schemas as a JavaScript developer
+
+A TypeBox `Type.Object({...})` resembles a machine-readable JSDoc `@param`
+block. It answers three questions:
+
+1. **What shape of JSON does the model need to send?** (the schema itself)
+2. **What TypeScript type does `params` have in `execute`?** (derived from schema)
+3. **What does the model see in its tool description?** (serialized to JSON Schema)
+
+If you define a parameter as `Type.String()` and the model sends `42`, Pi
+rejects the call before your `execute` runs. This prevents malformed tool calls
+from reaching your code.
+
+### StringEnum vs Type.Union for string literals
+
+For tools exposed to Google's Gemini API, use `StringEnum` from `@earendil-works/pi-ai`
+instead of `Type.Union([Type.Literal("a"), Type.Literal("b")])`. Google's API does
+not support the `enum` constraint produced by `Type.Union` with literals, so the
+model might suggest invalid values. `StringEnum` generates the correct JSON Schema
+form that all providers understand.
+
+## Commands, UI, and rendering
+
+Commands are best for direct user actions and configuration. If multiple
+extensions register the same name, Pi keeps both and gives them numeric
+invocation suffixes in load order. Do not assume a command name is globally
+unique after loading third-party packages.
+
+`ctx.ui` supports notifications, select/confirm/input/editor dialogs, footer
+status, widgets, editor text, themes, custom autocomplete, tool expansion, and
+replacement editors. For a multi-key interaction, `ctx.ui.custom()` temporarily
+replaces the editor with a `@earendil-works/pi-tui` component.
+
+UI behavior depends on the mode. In TUI mode, `notify()` displays a
+fire-and-forget message, while dialogs wait for the user's response. In RPC
+mode, notifications emit requests that the client may display or ignore;
+dialogs emit requests and wait for matching client responses. In JSON and
+print modes, notifications are no-ops and dialogs return their cancellation
+defaults (`false` or `undefined`). Check `ctx.hasUI` before opening a dialog,
+and require `ctx.mode === "tui"` for components that need a terminal.
+
+Use a message renderer for a custom message created with `pi.sendMessage()`;
+that content participates in LLM context. Use an entry renderer for a custom
+entry created with `pi.appendEntry()`; that is durable transcript/UI state but
+does not reach the LLM. This is the key display-versus-context choice.
+
+## State, sessions, and queues
+
+Use this section to choose where extension state lives and how it schedules
+work around an active agent.
+
+In-memory variables vanish on reload, resume, fork, and restart. Reconstruct
+state in `session_start` by examining the active branch. For tool-backed state,
+store a recoverable snapshot in that tool result's `details`; it follows the
+conversation branch naturally. Use `appendEntry()` for state that should not
+enter model context.
+
+`pi.sendMessage()` injects a custom message into the session and accepts a
+`deliverAs` mode. The agent loop drains the queues at different points:
+
+| Mode | When it is applied | Effect on the active run |
+|---|---|---|
+| `steer` (default) | After the current assistant message and its tool batch finish, before the next AI-model request | Can re-enter the active multi-turn tool loop. Later steers and tool work still run before any `followUp`. |
+| `followUp` | Only when the agent is about to stop: no remaining tool calls and no pending steers | Starts another turn after that work would otherwise end. Already-queued steers, and the tools they cause, run first. |
+| `nextTurn` | With the *next* user-originated prompt | Never interrupts the active run and never starts one by itself. |
+
+While the agent is idle, `sendMessage()` with `deliverAs: "steer"` or
+`"followUp"` still only appends unless you also pass `triggerTurn: true`, which
+starts an AI-model turn immediately. `triggerTurn` is ignored for `nextTurn`.
+
+`pi.sendUserMessage()` injects a genuine user message (not a custom one) and
+always starts or continues a turn:
+
+- Idle: send immediately; `deliverAs` is not required.
+- Streaming: you must pass `deliverAs: "steer"` or `"followUp"` (same queue
+  timings as above). Omitting it throws. `nextTurn` is not available here.
+
+Do not start a second direct agent run from a hook; use these queues.
+
+## Distribute an extension as a Pi package
+
+For a reusable package, declare explicit resources in `package.json`:
+
+```json
+{
+  "name": "@acme/pi-team-tools",
+  "keywords": ["pi-package"],
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": ["./extensions"],
+    "skills": ["./skills"],
+    "prompts": ["./prompts"],
+    "themes": ["./themes"]
+  }
+}
+```
+
+Put third-party runtime packages in `dependencies`, not `devDependencies`:
+Pi package installation uses production installs by default. Core Pi packages
+are bundled by Pi, so list each one the package actually imports as a
+`peerDependency` with the documented `"*"` range rather than bundling a
+competing copy. The broad manifest above assumes a full-featured package that
+imports all five bundled packages. Include `@earendil-works/pi-tui` only when
+code imports TUI components or TUI types for custom UI/rendering. Include
+`typebox` only when code imports schemas directly from `typebox` rather than
+using the `Type`
+re-export from `@earendil-works/pi-ai`. Package conventions also discover
+`extensions/`, `skills/`, `prompts/`, and `themes/` when a `pi` manifest is not
+present, but an explicit manifest is clearer and supports filtering.
+
+Users can install a package from npm or git with `pi install`, or list it under
+the `packages` array in settings. Project-installed packages are trust-gated
+just like project-local extensions.
+
+### Step-by-step: from zero to a shareable extension package
+
+The following example creates a minimal distributable package outside the Pi
+monorepo.
+
+**Step 1 -- Initialize a package**
+
+```bash
+mkdir pi-hello-demo
+cd pi-hello-demo
+npm init -y
+```
+
+**Step 2 -- Add the extension code**
+```bash
+mkdir extensions
+```
+
+Create `extensions/index.ts` with the hello-pi extension from the earlier
+example in this chapter.
+
+**Step 3 -- Configure `package.json`**
+
+Edit `package.json` to add:
+
+```json
+{
+  "name": "@your-name/pi-hello-demo",
+  "keywords": ["pi-package"],
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": ["./extensions"]
+  }
+}
+```
+
+The `"pi-package"` keyword makes the package discoverable. The `pi` manifest
+declares its resource directories, and `peerDependencies` identifies the Pi
+runtime packages supplied by the host. This list is intentionally shorter than
+the earlier generic manifest: the hello extension imports only
+`@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent`. Add
+`@earendil-works/pi-agent-core`, `@earendil-works/pi-tui`, or `typebox` only if
+the package imports them.
+
+**Step 4 -- Test locally**
+
+In a project directory where you use Pi, add your package path to settings:
+
+```json
+{
+  "packages": ["/absolute/path/to/pi-hello-demo"]
+}
+```
+
+Then start Pi. Your extension should load. Test with `/hello-pi` and verify
+the startup notification appears.
+
+**Step 5 -- Publish to npm**
+
+```bash
+npm publish
+```
+
+Users can then install it with:
+
+```bash
+pi install @your-name/pi-hello-demo
+```
+
+For local testing before publishing, `pi install` also accepts a git URL or
+local path.
+
+### Package layout conventions
+
+| Directory | Contents | Discovered automatically? |
+|---|---|---|
+| `extensions/` | One or more `.ts` extension factories | Yes, when no `pi` manifest |
+| `skills/` | `.md` skill files | Yes, when no `pi` manifest |
+| `prompts/` | Prompt template files | Yes, when no `pi` manifest |
+| `themes/` | JSON theme files | Yes, when no `pi` manifest |
+
+With an explicit `pi` manifest, Pi uses only the declared paths. This supports
+non-standard locations and lets a package exclude conventional directories.
+
+## Debugging extensions
+
+Work from loading toward the failing behavior:
+
+1. **Confirm the module loads.** In TUI mode, add a `session_start`
+   notification. Then load the file directly with
+   `pi -e path/to/extension.ts`; if that works, discovery is the problem.
+   Check the exact filename (`extensions/name.ts` or
+   `extensions/name/index.ts`), the default factory export, and project trust
+   for `.pi/extensions/`. A named export alone is not loaded.
+2. **Check the code independently.** Run
+   `npx tsc --noEmit path/to/extension.ts`. Jiti transpiles TypeScript but does
+   not type-check it, so type errors can survive loading and fail later.
+3. **Isolate one boundary.** Exercise one command or one simple tool call. Add
+   temporary notifications to the relevant hooks in TUI mode, or concise
+   logging when testing print mode. Check command names, tool names, schemas,
+   and descriptions before debugging a multi-turn interaction.
+4. **Inspect model-facing state.** Run `/debug`. It writes rendered TUI lines
+   and the latest LLM messages to `~/.pi/agent/pi-debug.log`, which shows
+   whether tool definitions and prompt metadata reached the model.
+5. **Exercise lifecycle edges.** Run `/reload`, then test a new session,
+   resume, fork, and exit when relevant. Verify `session_shutdown` cleanup and
+   reconstruction in `session_start`.
+6. **Test without a TUI.** Run `pi -e path/to/extension.ts -p "your prompt"` to
+   catch unguarded UI assumptions. Notifications do nothing in print mode, so
+   do not use their absence there as evidence that loading failed.
+
+### Common pitfalls
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Extension never loads | Wrong path, missing default export, or untrusted project | Check discovery conventions, export the factory as default, and establish project trust |
+| `tool_call` handler does not match | Tool name or narrowing predicate is wrong | Check `event.toolName` and `isToolCallEventType()` |
+| State disappears after `/reload` | State exists only in closed-over variables | Rebuild it from session entries in `session_start` |
+| RPC dialog waits indefinitely | The client does not answer `extension_ui_request` | Send the matching response or set a dialog timeout |
+| A dialog silently denies in print/JSON mode | `ctx.hasUI` was not checked | Define a noninteractive policy before calling the dialog |
+| Extension works once but fails after reload | Stale references or leaked resources | Clean up idempotently in `session_shutdown`; do not reuse the old context after `reload()` |
+| Model never calls the tool | Weak description or missing prompt guidance | Tighten `description` and add tool-named `promptGuidelines` |
+| Parallel tools overwrite a file | The mutation bypasses Pi's per-file queue | Wrap the entire read-modify-write operation in `withFileMutationQueue` |
+
+Pi logs ordinary handler errors and continues. `tool_call` is fail-safe: if one
+of its handlers throws, Pi stops running later `tool_call` handlers for that
+call, does not execute the tool, and does not run `tool_result` handlers for it.
+Instead, the thrown error message becomes an `isError: true` tool-result message
+stored in the session and sent to the model; the agent loop and sibling tool
+calls can continue. Test policy hooks on both allow and deny paths.

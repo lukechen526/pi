@@ -1,4 +1,4 @@
-# Agent core: runs, events, queues, and tool batches
+# Agent core: runs, events, queues, and tool batches {#sec:agent-core}
 
 `packages/agent` is the reusable runtime beneath the coding agent. It knows
 about a model, a system prompt, messages, tools, streaming, queues, and
@@ -24,28 +24,77 @@ the caller cannot supply a valid hook/tool/message shape, start in `types.ts`.
 
 The `Agent` holds state including:
 
-- current system prompt, model, thinking level, and active tools;
-- durable messages accumulated in this runtime;
-- streaming message and pending tool IDs for UI observers;
-- active run/abort controller;
-- steering and follow-up message queues;
-- event listeners and optional caller hooks.
+- current system prompt, model, thinking level, and active tools
+- durable messages accumulated in this runtime
+- streaming message and pending tool IDs for UI observers
+- active run/abort controller
+- steering and follow-up message queues
+- event listeners and optional caller hooks
 
-Before a prompt starts, it creates a context snapshot with copies of the
-messages and tool arrays. The snapshot is shallow with respect to each message,
-but protects the loop from a caller mutating the arrays themselves during a
-turn. The loop owns its current context object and appends new messages as it
-emits events.
+Before a prompt starts, `createContextSnapshot()` copies the `messages` and
+`tools` arrays with `slice()` and captures the current system-prompt string.
+This is an array snapshot, not a deep clone: the message objects, their nested
+content blocks, and the tool definition objects remain shared with agent state.
+
+Array-level changes on either side stay isolated. After the run starts,
+replacing, pushing into, or reordering the agent state arrays does not alter
+the current loop context, and the same is true in reverse for the snapshot
+arrays the loop holds. Mutating an object already inside either array can still
+affect both views, because those objects are shared by reference. Treat
+messages and tool definitions as immutable once installed if a run may be
+active.
+
+The model and thinking level are captured separately in the loop config. The
+thinking level is copied as a primitive; the model object, like message and tool
+objects, is not cloned. The loop owns its current context object and appends new
+messages to its private message array as it emits events;
+`Agent.processEvents()` appends completed messages to the state transcript. A
+later `prepareNextTurn` update can explicitly replace the context, model, or
+thinking level between provider turns.
 
 ## Starting a prompt versus continuing a context
 
-`Agent.prompt()` normalizes input to one or more `AgentMessage` values. It
-rejects a concurrent active run, then calls `runAgentLoop()` with the snapshot.
-`Agent.continue()` instead uses the current transcript and requires its last
-message not to be an assistant message, except for explicit queued-message
-handling paths.
+When idle, `Agent.prompt()` normalizes input to one or more `AgentMessage`
+values, then calls `runAgentLoop()` with the snapshot. It does not start a
+second run when one is active. Because `prompt()` is async, the call returns a
+rejected promise:
 
-The distinction prevents accidental replay:
+```text
+Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.
+```
+
+The rejection occurs before normalization, event emission, or transcript
+mutation, and it does not abort or otherwise change the existing run.
+`Agent.continue()` rejects concurrently in the same way with `Agent is already
+processing. Wait for completion before continuing.` Callers must `await` the
+call (or otherwise handle its promise), not expect a synchronous throw. Queue
+with `steer()` or `followUp()`, or await `waitForIdle()`, instead of retrying
+concurrently.
+
+When idle, `Agent.continue()` resumes from the current transcript without
+appending a new caller message. Its default rule is that the last transcript
+message must not be an assistant message: continuation expects a
+user/tool-result tail that still needs a model response. There is one exception
+for queued work that arrived while the previous run was finishing:
+
+1. If the transcript ends in an assistant message, `continue()` first drains the
+   steering queue. Any drained steering messages are run as prompt messages
+   (without an extra initial steering poll).
+2. If steering is empty, it drains the follow-up queue and runs those messages
+   the same way.
+3. If both queues are empty, it rejects with
+   `Cannot continue from message role: assistant`.
+
+An empty transcript rejects with `No messages to continue from`. A non-assistant
+tail proceeds through `runContinuation()` and asks the model again from the
+existing context snapshot.
+
+`prompt()` versus `continue()` exists to prevent accidental replay of a finished
+turn. Calling `continue()` after a normal assistant stop would re-issue the same
+trailing context to the provider without a new user or tool-result message. That
+is usually a bug (double-send / empty re-prompt). Callers that truly need another
+model call must first change the transcript tail or deliver queued steering or
+follow-up content.
 
 ```text
 prompt(messages)      adds new user/custom messages and begins a run
@@ -54,9 +103,13 @@ steer(message)         queues content between assistant turns
 followUp(message)      queues content after the agent would otherwise stop
 ```
 
-Coding-agent uses this deliberately. It starts with a user message, then may
-call `continue()` after automatic retry/compaction preparation or messages
-queued by a post-run extension event.
+In the interactive coding-agent UI, Enter while a run is active maps to steer and
+Alt+Enter maps to follow-up; details are under Termination, steering, and
+follow-up below.
+
+Coding-agent uses `continue()` deliberately. It starts with a user message, then
+may call `continue()` after automatic retry/compaction preparation or after
+messages were queued by a post-run extension event.
 
 ## Active-run lifecycle and cancellation
 
@@ -69,11 +122,14 @@ stream and tool execution. A tool/extension that starts child work must forward
 the signal itself; abort does not magically cancel a detached fetch/process
 whose API was never given the signal.
 
-`waitForIdle()` resolves after the active run and awaited event listeners
-finish. In coding-agent, true application idleness can also include session
-policy after the low-level loop, such as retry or compaction. This is why
-extension authors should use the higher-level `agent_settled` event when they
-need Pi rather than only the current loop to be done.
+`waitForIdle()` resolves after the active low-level run and its awaited event
+listeners finish. In coding-agent, `AgentSession` may then automatically retry,
+compact and retry, or start a queued continuation. `AgentSession` emits
+`agent_settled` once after that session-level chain has ended and no such
+automatic work remains. `agent_settled` is a coding-agent extension/session
+event, not an event in the `packages/agent` `AgentEvent` union. Extension
+authors who need Pi as a whole to be idle should observe `agent_settled`; see
+[Extension event reference: `agent_start`, `agent_end`, and `agent_settled`](#sec:agent-events).
 
 ## Event stream as the observable protocol
 
@@ -138,16 +194,36 @@ tool-result message and can decide how to recover.
 | Mode | Behavior |
 |---|---|
 | `sequential` | Prepare, execute, finalize, and persist each tool before the next |
-| `parallel` | Preflight calls in source order; run prepared tools concurrently; finalize completion events as they finish; emit final result messages in source order |
+| `parallel` | Emit each start event and preflight each call in assistant-content order; after all preflights, run prepared tools concurrently; emit updates and end events as work progresses; after all calls finish, emit tool-result messages in assistant-content order |
 
-The `Agent` default is `parallel`. Parallel does not mean all events arrive in
-arbitrary order: preflight remains deterministic. It does mean a tool hook
-cannot assume a sibling's result has finished or been persisted. Use queues or
-turn-end state when tools need coordination.
+The `Agent` default is `parallel`. The ordering contract is direct: in a
+parallel batch, `tool_execution_start` and argument preparation occur in source
+order; prepared `execute()` functions start only after the preflight pass;
+`tool_execution_update` and `tool_execution_end` can interleave and end in
+completion order; `message_start`/`message_end` for the final `toolResult`
+messages wait for the whole batch and then occur in source order. An immediate
+preflight error can emit its end event during the ordered preflight pass, before
+prepared siblings begin execution.
 
-Some tool calls can request sequential execution through their definition or
-the batch's execution policy. Inspect the active tool behavior rather than
-assuming a single global mode if you build an advanced extension.
+The effective mode is batch-wide. The batch is sequential if
+`agent.toolExecution === "sequential"` **or** any tool called by that assistant
+message has `executionMode: "sequential"` in the active context. It is parallel
+only when the agent mode is `"parallel"` and none of those called tools requires
+sequential execution. A tool marked `"parallel"` does not override a global or
+sibling sequential requirement.
+
+To inspect this behavior, first record `agent.toolExecution` and the
+`executionMode` fields of the active tool definitions at run start and after
+any `prepareNextTurn` refresh, then match those definitions to the tool calls in
+the assistant message. Subscribe to `tool_execution_start`, `_update`, and
+`_end` to observe lifecycle ordering; `agent.state.pendingToolCalls` contains
+the IDs between start and end. A start event and pending ID include preflight,
+so they do not prove that the tool's `execute()` body ran—instrument the tool
+wrapper or `execute()` entry when that distinction matters.
+
+Parallel execution means a tool hook cannot assume a sibling's result has
+finished or been persisted. Use explicit coordination or `turn_end` state when
+tools depend on one another.
 
 ## Before and after tool hooks
 
@@ -181,8 +257,22 @@ assistant/tool batch complete
   -> neither: agent_end
 ```
 
-This behavior is the technical meaning behind interactive Enter vs Alt+Enter
-while Pi is running.
+In interactive mode, these queues are selected by the submit key while Pi is
+working:
+
+- **Enter** submits with `streamingBehavior: "steer"`. The message waits for the
+  current assistant response and its entire tool batch to finish, then enters
+  before the next provider request. It does not interrupt a tool midway.
+- **Alt+Enter** submits with `streamingBehavior: "followUp"`. The message is not
+  considered until the inner tool/steering loop would otherwise stop, so
+  already queued steering and the work it causes run first.
+
+When Pi is idle, both keys perform a normal submission; Alt+Enter does not
+create a deferred message. Queue drain settings can deliver either the oldest
+message only (`"one-at-a-time"`, the default) or all messages at a drain point
+(`"all"`). During compaction the interactive layer preserves the same
+steering-versus-follow-up classification and delivers the queued input when
+compaction permits.
 
 ## Next-turn refresh hook
 
@@ -212,12 +302,12 @@ the model continue.
 If you use `packages/agent` outside coding-agent, you must provide policy that
 coding-agent normally supplies:
 
-- initial `AgentState` with a valid model/system prompt/tools;
-- `convertToLlm` for your message representation;
-- provider `streamFn` and credentials or key resolver;
-- listeners that persist/render state if needed;
-- context transformation/queue behavior appropriate to your application;
-- tool definitions and any permission gate.
+- initial `AgentState` with a valid model/system prompt/tools
+- `convertToLlm` for your message representation
+- provider `streamFn` and credentials or key resolver
+- listeners that persist/render state if needed
+- context transformation/queue behavior appropriate to your application
+- tool definitions and any permission gate
 
 The package gives a rigorous loop, not a complete coding application. That is
 the reason Pi can support the interactive CLI, SDK examples, and other hosts
