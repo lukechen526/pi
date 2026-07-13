@@ -10,10 +10,27 @@ This chapter is for extension authors, embedders, and contributors debugging
 resume, branching, or context selection. If you only use Pi interactively, the
 branching and compaction sections explain the behavior you will observe.
 
-It is grounded in `packages/coding-agent/src/core/session-manager.ts`,
-`packages/coding-agent/src/core/messages.ts`,
-`packages/coding-agent/src/core/agent-session-runtime.ts`, and
-`packages/coding-agent/docs/session-format.md`.
+It is grounded in four files:
+
+- `packages/coding-agent/src/core/session-manager.ts` for persistence and
+  context reconstruction.
+- `packages/coding-agent/src/core/messages.ts` for message conversion.
+- `packages/coding-agent/src/core/agent-session-runtime.ts` for replacement and
+  cleanup.
+- `packages/coding-agent/docs/session-format.md` for the durable file format.
+
+## Vocabulary before the file format
+
+A **session** is Pi's durable record of a conversation. An **entry** is one
+record in that session. A **branch** is one path through entries that share a
+common history. The **leaf** is the current last entry on that path. **Context**
+is the selected representation sent to the model; it is not automatically the
+whole file on disk.
+
+Start by imagining two answers to the same user question: answer A and answer
+B share the earlier messages but diverge later. A flat array cannot keep both
+answers without duplication. The small tree below shows why Pi stores parents
+and children before the chapter introduces JSONL details.
 
 ## Why persistence is a tree
 

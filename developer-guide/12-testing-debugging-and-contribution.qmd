@@ -1,6 +1,6 @@
 # Testing, debugging, and contribution workflow {#sec:testing}
 
-This chapter turns the system map from [Chapter 2](#sec:architecture) into a
+This chapter turns the system map from [Architecture](#sec:architecture) into a
 practical workflow for reproducing failures, choosing tests, and preparing a
 change for review. Pi's repository rules distinguish code checks, targeted
 tests, interactive testing, and real-provider behavior. Use the narrowest
@@ -11,7 +11,20 @@ Repository-wide contribution rules live in `AGENTS.md`. Coding-agent-specific
 development and extension guidance lives in
 `packages/coding-agent/docs/development.md` and
 `packages/coding-agent/docs/extensions.md`. For runtime failure ownership and
-recovery behavior, see [Chapter 16](#sec:failure).
+recovery behavior, see [Failure and recovery](#sec:failure).
+
+## Three kinds of evidence
+
+A **check** asks whether code satisfies static rules, a **test** asks whether a
+repeatable behavior still works, and a **smoke test** exercises a real host such
+as the interactive TUI. They answer different questions. For a tool change,
+start with a focused test for success and failure, then use the TUI only if the
+rendering or input path also changed.
+
+When debugging, first write the expected boundary in one sentence: "the
+extension should block this validated `bash` call," or "the model should
+receive this converted message." Then inspect the first boundary where reality
+differs. The tables below turn that sentence into a repeatable workflow.
 
 ## Localize the failure first
 

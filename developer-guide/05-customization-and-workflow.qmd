@@ -4,6 +4,18 @@ This chapter turns the architecture into decisions. It also calls out the
 mistakes that most often create an extension which appears to work once but
 fails on reload, in parallel tool mode, or outside the interactive terminals.
 
+## Start with the decision, not the API
+
+Use **configuration** for a stable value, an **extension** for behavior that
+reacts to events or needs Pi APIs, and a **core change** only when the behavior
+must be shared by every host. For example, changing a model default is
+configuration; asking for confirmation before `bash` is an extension; changing
+how every tool batch is scheduled belongs in the agent core.
+
+The examples in this chapter are deliberately independent. Read the safety
+gate first, then the context and persistence patterns, and use the final
+verification ladder after adapting one pattern to your feature.
+
 ## Configuration before code
 
 Pi configuration is layered. By default, the coding-agent package uses
@@ -95,7 +107,7 @@ conditional instruction over replacing the entire system prompt; replacement
 can accidentally discard skills, tools, context files, and user-provided
 instructions. For a message-level context transformation before *every*
 provider request, use the `context` event instead; see
-[Chapter 14](#sec:choose-event)
+[the extension event reference](#sec:choose-event)
 for when `context` is the right boundary versus prompt-scoped or provider hooks.
 
 ## Pattern: state that survives restart and branching

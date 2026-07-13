@@ -24,6 +24,20 @@ Key source files are `packages/ai/src/types.ts`, `packages/ai/src/compat.ts`,
 `packages/ai/src/models.ts`, `packages/coding-agent/src/core/model-registry.ts`,
 and `packages/coding-agent/src/core/auth-storage.ts`.
 
+## Vocabulary and a concrete comparison
+
+A **model** is the named capability record Pi selects. A **provider** is the
+service or adapter that can answer requests. A **credential** proves access to
+that provider. An **API adapter** translates Pi's normalized request into one
+provider's wire format. In a local setup, `local-model` is a model ID,
+`local` is a provider name, an environment variable is a credential source,
+and `openai-completions` is an adapter choice. These are four different values,
+not four names for the same thing.
+
+Read the chapter in that order: metadata, registry, credentials, dispatch,
+then custom providers. It prevents an authentication problem from being
+mistaken for a model-catalog problem.
+
 ## The `Model` contract
 
 A model is a data record consumed by the agent and provider layer. Its important

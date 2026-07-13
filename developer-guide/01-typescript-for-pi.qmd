@@ -10,6 +10,15 @@ The chapter follows one small status-reporting tool as it grows. Each step adds
 one idea that appears in Pi's source. After the guided path, the reference
 sections collect errors, utility types, and a glossary.
 
+## How to use this chapter
+
+Read the first five parts in order. Every new TypeScript idea starts with a
+small JavaScript-shaped example, then adds the type information Pi uses. In
+this chapter, a **value** is something the running program can use, a **type**
+is a description checked before the program runs, and a **module** is one file
+that can import and export names. Those three words explain most of the
+language-specific syntax that follows.
+
 ## What you should know first
 
 You should be comfortable with:
