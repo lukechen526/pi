@@ -6,6 +6,21 @@ useful outside the coding agent. The coding-agent package owns command-line
 behavior, local filesystem tools, project resources, session UX, and the
 extension API; the `agent` package should not learn those policies.
 
+## What you will learn first
+
+Start with the package map, then follow the startup diagram, and only then read
+the package walkthrough. A **package** is a deployable unit with its own public
+exports. A **dependency** is a package another package imports. An **entry
+point** is the file where a feature or application begins. A **boundary** is a
+place where one representation becomes another, such as a provider message
+becoming an agent event.
+
+For a small example, the terminal-facing `coding-agent` package depends on the
+generic `agent` package, while `agent` depends on the provider-neutral `ai`
+package. The direction tells you where a fix belongs: a terminal component
+does not belong in `packages/agent`, and provider JSON does not belong in the
+TUI.
+
 ## Dependency direction
 
 ```text
@@ -217,3 +232,11 @@ Use the narrowest layer that truthfully owns the behavior:
 Continue to [Prompt lifecycle](#sec:prompt-lifecycle) for a source-level trace
 of how these package boundaries cooperate from interactive input through model
 streaming, tool execution, persistence, and rendering.
+
+## Beginner checkpoint
+
+Before continuing, name the owner for each change: a reusable terminal
+primitive, a provider serializer, a generic tool-loop rule, a Pi session rule,
+and a user-specific behavior. If you can point each one to `tui`, `ai`,
+`agent`, `coding-agent`, and an extension respectively, the package map is
+working.

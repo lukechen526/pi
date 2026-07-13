@@ -5,6 +5,19 @@ exception to escape through every layer. This operational reference is for
 extension authors and contributors debugging failures or designing recovery;
 it is a symptom-to-owner lookup, not a step-by-step tutorial.
 
+## How to use the reference
+
+An **error** means an operation failed. An **abort** means work was stopped by
+an explicit cancellation request. A **retry** starts another attempt, while
+**recovery** can also mean returning an actionable tool result or falling back
+to a safe renderer. Start with the first layer where the symptom appears, then
+follow the owning layer's recovery action; do not retry before deciding which
+kind of failure you have.
+
+For example, malformed tool arguments should become a tool error the model can
+correct, while a missing API key must be fixed in model/auth configuration.
+Both may look like "the prompt failed," but they have different owners.
+
 ## Failure flow by runtime layer
 
 ```text

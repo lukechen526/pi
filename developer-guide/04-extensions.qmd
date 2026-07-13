@@ -12,6 +12,19 @@ code, not a sandbox. Review a package before installing it and treat an
 extension's filesystem, process, network, and credential access as you would a
 normal local program.
 
+## Learning path and first vocabulary
+
+An **extension** is code Pi loads at runtime. A **hook** is a named event where
+that code can observe or change a supported part of the lifecycle. A **tool**
+is a model-callable function with a validated input shape. A **context** is the
+object passed to a handler, including the session, cancellation signal, and
+possible UI.
+
+Begin with the smallest useful extension: one command that displays a notice.
+Then compare it with a tool, a hook, and durable state. The examples later in
+the chapter are larger because each adds one of those responsibilities; do not
+copy the package example until the one-file version is clear.
+
 ## Choose the right customization mechanism
 
 Before writing code, use the smallest mechanism that owns the behavior:

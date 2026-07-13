@@ -8,6 +8,17 @@ project trust, extensions, or built-in filesystem tools.
 The central source files are `packages/agent/src/agent.ts`,
 `src/agent-loop.ts`, and `src/types.ts`.
 
+## The smallest useful mental model
+
+An **agent run** repeats this cycle: send context to a model, receive streamed
+events, execute any requested tools, append the results, and either stop or
+send another turn. The `Agent` class owns changing state around that cycle;
+`agent-loop.ts` performs the cycle; `types.ts` defines the records exchanged.
+
+Keep two cases in mind. A text-only answer finishes after one provider stream.
+A tool-using answer returns to the provider after each tool batch. The rest of
+the chapter explains the events and queues that make both cases observable.
+
 ## The three layers inside the package
 
 | Layer | Main file | Responsibility |

@@ -17,6 +17,18 @@ Relevant files include `packages/tui/src/tui.ts`,
 `packages/tui/src/autocomplete.ts`, and
 `packages/coding-agent/src/modes/interactive/interactive-mode.ts`.
 
+## Vocabulary before rendering details
+
+A **terminal UI (TUI)** is an interface drawn inside a terminal window. A
+**component** is an object that renders lines and handles input. A **frame** is
+one rendered screen state. **Differential rendering** updates only lines that
+changed between frames. `InteractiveMode` composes these primitives into Pi's
+chat; it does not define the generic terminal primitives itself.
+
+Start with a static line, then a component that changes its text, then a
+streaming assistant row. That progression explains why components invalidate
+themselves and why the TUI listens to agent events instead of polling a model.
+
 ## The TUI package owns terminal mechanics
 
 The public barrel `packages/tui/src/index.ts` exports the `TUI` class,

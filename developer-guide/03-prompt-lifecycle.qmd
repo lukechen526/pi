@@ -17,6 +17,18 @@ messages, and other modes. The numbered path summarizes the current source;
 its diagrams omit helper calls that do not alter the data/control boundary
 being explained.
 
+## A small vocabulary for the trace
+
+An **event** is a record saying that something happened. A **stream** is a
+sequence of partial results delivered over time. A **turn** is one model
+request and the tool work that follows it. A **settled** run is one with no
+retry, compaction, or queued continuation left to perform.
+
+Use two prompts to keep the distinction concrete: `"What files changed?"`
+usually creates one model turn, while `"Read the config and fix the failing
+test"` can create several turns because the model may call `read`, then `bash`,
+then answer. The path below explains what stays the same in both examples.
+
 ## The complete path
 
 ```text
@@ -148,7 +160,7 @@ context construction only prepares the adapter input.
 This stage charts the coding-agent stream path from the snapshotted `Model` to a
 provider adapter. Model *catalog* selection and runtime changes belong to
 session creation and `/model` (see Stage 4's opening and
-`developer-guide/09-models-providers-and-auth.md`); they are not re-decided
+`developer-guide/09-models-providers-and-auth.qmd`); they are not re-decided
 here.
 
 Coding-agent installs a custom `streamFn` on `Agent` in `core/sdk.ts`. For each
@@ -182,7 +194,7 @@ this stage is auth/header resolution for the chosen model, not model selection.
 Scope boundary for this chapter: the numbered path stops at adapter
 `streamSimple` and the three provider-extension insertion points. Vendor wire
 formats, transport negotiation, custom provider registration, and auth-storage
-details live in `developer-guide/09-models-providers-and-auth.md` and the
+details live in `developer-guide/09-models-providers-and-auth.qmd` and the
 provider-hook reference in
 `packages/coding-agent/docs/extensions.md` (`before_provider_headers`,
 `before_provider_request`, `after_provider_response`). Those headers/payload

@@ -5,6 +5,12 @@ need to be comfortable reading code. Its job is practical: by the end, you
 should be able to trace a prompt through Pi, find the right layer for a change,
 and build an extension without guessing at the API.
 
+The book is deliberately staged. First learn enough TypeScript to read the
+examples, then learn the runtime path, then study the concrete tools and state
+that make Pi useful. Only after that do the extension, UI, integration, and
+reference chapters introduce the less common edges of the system. Each chapter
+opens with its vocabulary and a small mental model before it uses the source.
+
 This is a guide to the repository as checked out, not a replacement for the
 published user documentation. File paths throughout are repository-relative.
 They are deliberately specific so that you can open the implementation beside
@@ -43,8 +49,8 @@ published build.
 
 If you only want to write extensions (not modify Pi itself), you do not need to
 clone this repository. Install pi globally and start writing `.ts` files under
-`~/.pi/agent/extensions/`. The extension guide in [chapter 4](#sec:extensions)
-walks through each step.
+`~/.pi/agent/extensions/`. The extension chapter walks through each step after
+the guide has introduced the agent loop and tool contract.
 
 ### Editor setup
 
@@ -159,49 +165,33 @@ not bypass the agent loop.
 
 ## Reading order and outcomes
 
-Read chapters 1–5 in order for the shortest path from repository orientation to
-a working customization:
+Read the first six content chapters in order, after this welcome chapter. They
+form the beginner path from "I can read this file" to "I can make a small, safe
+extension":
 
-1. [TypeScript used by Pi](#sec:typescript) makes the recurring type
-   syntax and module conventions readable.
+1. [TypeScript used by Pi](#sec:typescript) teaches the language patterns that
+   appear in the rest of the book.
 2. [Architecture: packages, ownership, and entry points](#sec:architecture)
-   maps package boundaries and runtime entry points.
+   gives each package one clear job.
 3. [Prompt lifecycle: from Enter to the next render](#sec:prompt-lifecycle)
-   follows one prompt through the major runtime boundaries.
-4. [Extensions: change Pi without forking it](#sec:extensions) explains
-   discovery, hooks, tools, UI, state, packaging, and a minimal extension.
-5. [Customization patterns and contributor workflow](#sec:customization)
-   helps you choose configuration, an extension, SDK use, or a core change.
+   shows the whole journey without requiring source-level detail yet.
+4. [Agent core: runs, events, queues, and tool batches](#sec:agent-core)
+   explains the reusable loop at the center of that journey.
+5. [Built-in tools: filesystem and shell execution](#sec:tools) turns the loop
+   into concrete, inspectable operations.
+6. [Extensions: change Pi without forking it](#sec:extensions) uses those
+   concepts to build a first customization.
 
-Then continue through the subsystem chapters and source exercises as your work
-requires:
+The next six content chapters explain the surrounding systems in the order a real feature
+usually encounters them: [sessions and durable context](#sec:sessions),
+[resources, settings, and trust](#sec:resources), [models and authentication](#sec:models),
+[the terminal UI](#sec:tui), [customization decisions](#sec:customization),
+and [testing and debugging](#sec:testing).
 
-6. [Sessions, branches, and durable context](#sec:sessions) covers
-   persistence, branching, compaction, and extension state.
-7. [Resources, settings, and project trust](#sec:resources)
-   explains startup inputs, precedence, discovery, and trust boundaries.
-8. [Built-in tools: filesystem and shell execution](#sec:tools)
-   describes tool registration, execution, cancellation, and safety behavior.
-9. [Models, providers, streaming, and authentication](#sec:models)
-   separates model metadata, provider adapters, credentials, and dispatch.
-10. [Agent core: runs, events, queues, and tool batches](#sec:agent-core)
-    details the reusable loop beneath the coding agent.
-11. [Terminal UI and interactive mode](#sec:tui) maps TUI
-    primitives to the coding-agent interaction layer.
-12. [Testing, debugging, and contribution workflow](#sec:testing)
-    shows how to localize failures and choose the right validation path.
-13. [Guided source tours and architecture exercises](#sec:tours)
-    turns the architecture into repeatable code-reading exercises.
-
-Chapters 14–16 are concise references to consult while implementing or
-troubleshooting:
-
-14. [Extension event and API reference](#sec:events) helps
-    select hooks by representation, timing, return value, and lifecycle.
-15. [Run modes, SDK embedding, and operational boundaries](#sec:modes)
-    compares interactive, print, JSON, RPC, and SDK hosts.
-16. [Failure and recovery reference](#sec:failure) maps
-    symptoms and failure data to the responsible layer and recovery behavior.
+The final four content chapters are practice and reference material: [guided source tours](#sec:tours),
+the [extension event reference](#sec:events), [run modes and SDK embedding](#sec:modes),
+and the [failure and recovery reference](#sec:failure). Use the [glossary](#sec:glossary)
+whenever a term becomes dense.
 
 The [glossary](#sec:glossary) is a quick reference for terms that recur across
 the codebase.

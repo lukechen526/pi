@@ -13,6 +13,18 @@ Start with `packages/coding-agent/src/main.ts`,
 hosts are `packages/coding-agent/docs/json.md` and
 `packages/coding-agent/docs/rpc.md`.
 
+## Start with the host, not the flag
+
+A **host** is the program that drives Pi. A **mode** describes how that host
+communicates: a TUI has a terminal, print mode returns text once, JSON emits
+machine-readable events, and RPC keeps a process open behind a protocol. An
+**SDK embedding** calls the runtime from another program instead of starting
+the `pi` binary.
+
+The same agent/session runtime serves all four modes, but UI assumptions do
+not transfer automatically. First choose the host, then check `ctx.mode` and
+`ctx.hasUI`, and only then design extension behavior.
+
 ## How Pi chooses a mode
 
 `packages/coding-agent/src/main.ts` resolves application mode from explicit

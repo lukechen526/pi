@@ -7,6 +7,15 @@ with the source open; the purpose is to learn how the modules connect, not to
 memorize file names. All paths in this chapter are relative to the repository
 root.
 
+## How to do a source tour
+
+Each tour has four parts: a **question**, a starting file, a short list of
+boundaries to trace, and an **outcome** you can explain in your own words.
+Before opening the source, predict the path. Then verify the prediction with
+one symbol search and one nearby test or example. For instance, before Tour 1
+you should predict that `cli.ts` parses arguments and hands control to a mode;
+the tour shows where that prediction is right and where it is incomplete.
+
 ## Tour 1: What launches when `pi` starts?
 
 **Question:** Which module turns process arguments into an interactive agent?
@@ -113,7 +122,7 @@ that sees the representation you need to change.
 
 **Question:** How does a provider delta become a changed terminal row?
 
-This tour is the concrete entry for Chapter 11 (Terminal UI and interactive
+This tour is the concrete entry for the Terminal UI and interactive
 mode). Start in `packages/agent/src/agent-loop.ts` at
 `streamAssistantResponse`. Find how `text_delta`, `thinking_delta`, and
 `toolcall_delta` replace the partial assistant message and emit
@@ -281,7 +290,7 @@ routine is:
 | 3 | Sessions/compaction | One active-branch/context sketch |
 | 4 | Built-in tools | One tool contract comparison |
 | 5 | Extensions (Tour 10) | A working one-file extension plus `/reload` and noninteractive checks |
-| 6 | TUI (Tour 5 / Chapter 11) | Trace one `message_update` from `streamAssistantResponse` through `InteractiveMode.handleEvent` to `AssistantMessageComponent.updateContent` |
+| 6 | TUI (Tour 5) | Trace one `message_update` from `streamAssistantResponse` through `InteractiveMode.handleEvent` to `AssistantMessageComponent.updateContent` |
 | 7 | Provider config (Tour 8) | A local/custom provider configuration review |
 
 The guide is intentionally organized so each exercise has a corresponding

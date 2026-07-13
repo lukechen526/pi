@@ -18,6 +18,18 @@ Choose the least powerful category that solves the problem, and review a
 package according to what it contains rather than treating "package" as a
 separate security mode.
 
+## The four words to keep separate
+
+A **resource** is something Pi discovers at startup, such as a skill, prompt,
+theme, or extension. A **setting** is configuration that changes how Pi runs.
+**Trust** is the decision that permits project-local code or settings to load.
+A **scope** is where a value applies, usually global or project-local.
+
+For example, a project prompt file supplies instructions, a project extension
+can execute code, and a project setting can enable either one. They may arrive
+from the same package directory, but they do not have the same power or trust
+requirements.
+
 ## The startup services boundary
 
 `createAgentSessionServices()` creates the cwd-bound services needed for a

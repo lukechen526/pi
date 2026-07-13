@@ -12,6 +12,19 @@ construction helpers are re-exported from the
 matters when using, extending, or debugging the tools rather than teaching
 shell commands.
 
+## Start with the tool contract
+
+Before reading `read` or `bash`, learn the shared shape: a **schema** describes
+valid inputs, a **description** tells the model when to use the tool, an
+`execute` function performs the work, and optional **renderers** show the call
+and result in the TUI. For example, both `read` and a custom `listTodos` tool
+need validated input and an actionable result, even though one uses the local
+filesystem and the other may use a database.
+
+The chapter teaches the contract first, then compares read-only work with
+mutating work and short commands with streaming commands. That order makes the
+queue, truncation, and cancellation rules easier to recognize in each tool.
+
 ## Tool registry and default selection
 
 `core/tools/index.ts` is the tool factory map. It defines the `ToolName` union
