@@ -9,23 +9,35 @@ book:
   date: today
   chapters:
     - index.qmd
-    - 01-typescript-for-pi.qmd
-    - 02-architecture.qmd
-    - 03-prompt-lifecycle.qmd
-    - 10-agent-core.qmd
-    - 08-built-in-tools.qmd
-    - 04-extensions.qmd
-    - 06-sessions-and-context.qmd
-    - 07-resources-settings-and-trust.qmd
-    - 09-models-providers-and-auth.qmd
-    - 11-tui-and-interactive-mode.qmd
-    - 05-customization-and-workflow.qmd
-    - 12-testing-debugging-and-contribution.qmd
-    - 13-guided-source-tours.qmd
-    - 14-extension-event-reference.qmd
-    - 15-modes-sdk-and-operations.qmd
-    - 16-failure-and-recovery-reference.qmd
-    - glossary.qmd
+    - part: "Start here"
+      chapters:
+        - 01-typescript-for-pi.qmd
+        - 02-architecture.qmd
+    - part: "Runtime"
+      chapters:
+        - 03-prompt-lifecycle.qmd
+        - 10-agent-core.qmd
+        - 08-built-in-tools.qmd
+    - part: "Build extensions"
+      chapters:
+        - 04-extensions.qmd
+        - 05-customization-and-workflow.qmd
+    - part: "Subsystems and contribution"
+      chapters:
+        - 06-sessions-and-context.qmd
+        - 07-resources-settings-and-trust.qmd
+        - 09-models-providers-and-auth.qmd
+        - 11-tui-and-interactive-mode.qmd
+        - 12-testing-debugging-and-contribution.qmd
+    - part: "Practice and reference"
+      chapters:
+        - 13-guided-source-tours.qmd
+        - 14-extension-event-reference.qmd
+        - 15-modes-sdk-and-operations.qmd
+        - 16-failure-and-recovery-reference.qmd
+        - glossary.qmd
+  appendices:
+    - 17-typescript-foundations-workbook.qmd
 
 format:
   pdf:

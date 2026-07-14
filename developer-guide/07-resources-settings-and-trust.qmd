@@ -1,11 +1,15 @@
 # Resources, settings, and project trust {#sec:resources}
 
 Before the first prompt, Pi assembles a runtime from configuration, credentials,
-models, extensions, skills, prompts, themes, and context files. This chapter
+models, extensions, skills, prompts, themes, and context files. Read [Sessions
+and durable context](#sec:sessions) first if `sessionDir` or persisted state is
+new to you; read [Extensions](#sec:extensions) before writing executable
+project resources. This chapter
 explains that startup surface so you can change configuration intentionally and
 know when a project-local change will be ignored.
 
-Unless otherwise noted, paths in this chapter are relative to
+Here, **cwd** means the current working directory associated with the
+session. Unless otherwise noted, paths in this chapter are relative to
 `packages/coding-agent/`. Primary implementation files are
 `src/core/settings-manager.ts`, `src/core/resource-loader.ts`,
 `src/core/trust-manager.ts`, and `src/core/agent-session-services.ts`. The
@@ -32,8 +36,8 @@ requirements.
 
 ## The startup services boundary
 
-`createAgentSessionServices()` creates the cwd-bound services needed for a
-session:
+`createAgentSessionServices()` creates the services bound to the session's
+cwd, meaning its current working directory:
 
 ```text
 cwd + agent directory
@@ -60,21 +64,42 @@ Pi reads JSON settings from two conventional scopes:
 | `~/.pi/agent/settings.json` | All projects for the current user | `~/.pi/agent` |
 | `.pi/settings.json` | The current project | `.pi` |
 
-Project settings override global settings. Nested objects are merged, so a
-project can adjust only one compaction field while retaining the global
-default for the rest:
+Project values take precedence over global values. For a top-level
+object-valued setting, `deepMergeSettings()` combines the global and project
+objects one level deep: project properties replace same-named global
+properties, while other global properties remain. This is a shallow merge at
+the setting's top level, not a recursive merge of nested objects.
+
+Arrays have different semantics. A project array replaces the global array; it
+is never unioned. If the project omits an array, the global array remains in
+the effective settings. This applies to `extensions`, `skills`, `prompts`,
+`themes`, `packages`, and any other array-valued setting.
+
+For example:
 
 ```json
-// global
-{ "compaction": { "enabled": true, "reserveTokens": 16384 } }
+// ~/.pi/agent/settings.json (global)
+{
+  "compaction": { "enabled": true, "reserveTokens": 16384 },
+  "extensions": ["~/.pi/agent/extensions/shared.ts", "~/.pi/agent/extensions/audit.ts"],
+  "skills": ["~/.pi/agent/skills/review.md"],
+  "themes": ["~/.pi/agent/themes/dark.json"]
+}
 
-// project
-{ "compaction": { "reserveTokens": 8192 } }
+// .pi/settings.json (project)
+{
+  "compaction": { "reserveTokens": 8192 },
+  "extensions": ["extensions/project.ts"],
+  "skills": []
+}
 ```
 
-The effective configuration has `enabled: true` and `reserveTokens: 8192`.
-Use this pattern for small project adjustments rather than copying a full
-settings file that becomes stale as Pi adds defaults.
+The effective `compaction` is `{ "enabled": true, "reserveTokens": 8192 }`.
+The effective `extensions` is only `["extensions/project.ts"]` (resolved from
+the project settings directory), and the
+empty project `skills` array deliberately clears the global skill list. Because
+`themes` is omitted from the project file, the global theme array remains. Use
+an omitted array to inherit and an explicit array—including `[]`—to replace.
 
 ## Trust is an execution policy, not a cosmetic prompt
 
@@ -84,18 +109,23 @@ configuration, installs project packages, or executes project extensions.
 
 At interactive startup, Pi looks for trust-requiring inputs and for a saved
 decision covering the current folder or one of its parents. If neither settles
-the question, Pi can prompt. Approval enables `.pi/settings.json`, local
+the question, Pi can prompt. In the TUI, this appears as an interactive trust
+dialog asking whether the current project should be trusted. Approval enables `.pi/settings.json`, local
 resources under `.pi`, missing package installation, `.agents/skills`, and
 extension code from those sources. Context instructions such as `AGENTS.md` and
 `CLAUDE.md` are the exception: they load regardless of trust unless context
 loading is disabled.
 
-Pi's noninteractive modes are print mode (`-p` or `--print`), which processes
-the initial prompt and exits; JSON mode (`--mode json`), which writes session
-events as JSON lines; and RPC mode (`--mode rpc`), which exchanges JSONL
-commands and events over standard input and output. None can display the
-startup trust prompt. Without an applicable saved decision, each follows the
-global `defaultProjectTrust` setting:
+Pi's noninteractive modes are:
+
+- **Print mode** (`-p` or `--print`) processes the initial prompt and exits.
+- **JSON mode** (`--mode json`) writes session events as JSON lines, with one
+  complete JSON object per line.
+- **RPC mode** (`--mode rpc`) accepts commands and returns results over standard
+  input and output for programmatic clients.
+
+None can display the startup trust prompt. Without an applicable saved
+decision, each follows the global `defaultProjectTrust` setting:
 
 | Value | Noninteractive behavior without saved decision |
 |---|---|
@@ -104,9 +134,10 @@ global `defaultProjectTrust` setting:
 | `"always"` | Trust project resources |
 
 The CLI flags `--approve`/`-a` and `--no-approve`/`-na` override the decision
-for one run only.
+for one run only. In CI, prefer `--approve` for a known checkout or configure a
+specific noninteractive policy rather than relying on an interactive prompt.
 
-`/trust` immediately writes the selected decision to
+> **Important:** `/trust` immediately writes the selected decision to
 `~/.pi/agent/trust.json`. The command changes persisted state for future Pi
 processes; it does not change the trust decision already resolved by the
 current process. A live `/reload` also keeps that already-resolved trust state,
@@ -173,9 +204,10 @@ content plus user arguments.
 skills as `/skill:name` slash commands and autocomplete entries. Setting it to
 `false` removes that interactive command surface; it does not unload skills from
 system-prompt construction, and `AgentSession` still expands a submitted
-`/skill:name` prompt into skill content. When debugging prompt content, inspect
-both `ctx.getSystemPromptOptions()` and the actual context event rather than
-searching only the typed text.
+`/skill:name` prompt into skill content. Here and below, `ctx` means the
+extension context passed to an extension hook, tool, or command. When debugging
+prompt content, inspect both `ctx.getSystemPromptOptions()` and the actual
+context event rather than searching only the typed text.
 
 ## Context files and system-prompt construction {#sec:context-files}
 
@@ -190,6 +222,8 @@ cwd-level file does not stop discovery in parent directories, but an
 `--no-context-files`/`-nc` disables this discovery.
 
 The loader provides loaded context files and skills to `AgentSession`.
+`_rebuildSystemPrompt()` is an internal helper; extensions should use
+`before_agent_start` to inspect or modify the prepared prompt. Internally,
 `_rebuildSystemPrompt()` creates structured `BuildSystemPromptOptions` from:
 
 - cwd;
@@ -244,6 +278,11 @@ not make an image model-capable; model input capabilities still control whether
 an image can be sent.
 
 ## Project configuration that an extension should respect
+
+The extension context, conventionally named `ctx`, is the object Pi passes to
+extension hooks, tools, and commands. It provides the current `cwd`, trust
+status, session manager, model services, UI/mode information, and run-state
+helpers. Define and use that context before resolving project configuration.
 
 An extension with its own project-level configuration should:
 

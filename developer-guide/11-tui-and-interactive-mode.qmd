@@ -1,7 +1,10 @@
 # Terminal UI and interactive mode {#sec:tui}
 
 Pi's interactive application is built from a reusable terminal UI package and
-a coding-agent-specific composition layer. The separation is worth learning:
+a coding-agent-specific composition layer. Before reading this chapter, review
+[Prompt lifecycle](#sec:prompt-lifecycle) and [Agent core](#sec:agent-core).
+Extension authors should also read [Extensions](#sec:extensions). The separation
+is worth learning:
 an extension normally customizes the coding-agent UI surface, while a
 contribution to `packages/tui` changes primitives that could serve another
 terminal application.
@@ -31,7 +34,8 @@ themselves and why the TUI listens to agent events instead of polling a model.
 
 ## The TUI package owns terminal mechanics
 
-The public barrel `packages/tui/src/index.ts` exports the `TUI` class,
+The public barrel (a re-export file) `packages/tui/src/index.ts` exports the
+`TUI` class,
 component/container interfaces, text/markdown/editor/list components, terminal
 implementations, key parsing/matching, keybindings, autocomplete, image
 support, and ANSI-aware text utilities.
@@ -39,8 +43,10 @@ support, and ANSI-aware text utilities.
 The `TUI` class is responsible for the component tree, focus, layout, input
 routing, overlays, terminal lifecycle, and differential screen updates. A
 component returns lines for an available width and can invalidate itself when
-its rendered state changes. This is a retained component model, not immediate
-`console.log` output.
+its rendered state changes. This is a **retained component model**: components
+persist across frames and the TUI updates their state, rather than rebuilding
+the screen from scratch on every update. It is not immediate `console.log`
+output.
 
 ## Differential rendering in practical terms
 
@@ -85,8 +91,9 @@ does not need to manage raw terminal escape sequences itself.
 
 ## Terminal lifecycle and capabilities
 
-`ProcessTerminal` and terminal support code manage stdin/stdout, raw mode,
-size information, terminal capabilities, and cleanup. Image rendering is
+`ProcessTerminal` and terminal support code manage stdin/stdout, raw mode (where the terminal passes each keystroke
+directly instead of waiting for Enter), size information, terminal
+capabilities, and cleanup. Image rendering is
 capability-dependent: Pi can choose Kitty, iTerm2, or fallback behavior based
 on what the terminal supports.
 
@@ -111,9 +118,14 @@ app.model.cycleForward
 ```
 
 An extension should display hints with `keyHint("app.tools.expand", "to expand")`
-or inspect the injected `KeybindingsManager`. It should not hardcode raw
-`ctrl+x` checks. Hardcoding bypasses user configuration and breaks the mapping
-between the keybindings file, help text, and actual behavior.
+or inspect the injected `KeybindingsManager`. `keyHint()` returns a styled
+string: it looks up the current configured key(s) with `keyText()`, styles the
+key as dim, and appends the styled description. It is presentation only; use
+`keybindings.matches(key, "app.tools.expand")` to handle input. It is exported
+from the coding-agent package's interactive components, not from the generic
+TUI package. Do not hardcode raw `ctrl+x` checks. Hardcoding bypasses user
+configuration and breaks the mapping between the keybindings file, help text,
+and actual behavior.
 
 ## Editor submission and queue semantics
 
@@ -134,7 +146,8 @@ handler also handles:
 - editor history, multiline text, image paste, autocomplete, and external edit.
 
 The detailed handling stays in `InteractiveMode` so `AgentSession` can serve
-print/RPC clients without importing terminal components.
+print/RPC (Remote Procedure Call) clients without importing terminal
+components.
 
 ## Transcript rendering from agent events
 
@@ -162,10 +175,14 @@ tool calls, errors, or a synthetic retry/compaction message.
 ## Tools in the transcript
 
 Tool rows are composed by the interactive components around a tool definition's
-`renderCall` and `renderResult` slots. The context passed to those renderers
-includes current args, a row-local mutable state object, optional last component,
-partial/final flags, expanded state, show-images preference, cwd, timing, and
-an `invalidate()` method.
+`renderCall` and `renderResult` slots. The public `ToolDefinition` type passes
+the current `Theme` as the `theme` argument to each renderer; the renderer does
+not discover a global theme by importing an internal module. Extension UI
+factories similarly receive `theme`, and `ctx.ui.theme` exposes the current
+coding-agent theme for code that needs to style outside a renderer. The context
+passed to those renderers includes current args, a row-local mutable state
+object, optional last component, partial/final flags, expanded state,
+show-images preference, cwd, timing, and an `invalidate()` method.
 
 This produces a useful layering:
 
@@ -219,6 +236,14 @@ component surface.
 the TUI instance, current theme, a keybindings manager, and a `done(value)`
 callback. The component handles input until it calls `done`.
 
+Start with a static component:
+
+```ts
+await ctx.ui.custom(() => new Text("Press Enter to continue", 1, 1));
+```
+
+Then add focus, keybindings, and a `done(value)` result:
+
 ```ts
 const answer = await ctx.ui.custom<boolean>((_tui, _theme, keybindings, done) => {
   // Text(text, paddingX, paddingY): cell padding left/right then top/bottom
@@ -252,7 +277,48 @@ The reliable pattern is:
 5. Preserve existing file-completion decisions unless deliberately changing it.
 
 This prevents an extension's `#issue` or `$variable` completion from disabling
-normal slash/path completion elsewhere in the line.
+normal slash/path completion elsewhere in the line. The public interfaces in
+`packages/tui/src/autocomplete.ts` are enough for a small provider wrapper:
+
+```ts
+import type {
+  AutocompleteItem,
+  AutocompleteProvider,
+  AutocompleteSuggestions,
+} from "@earendil-works/pi-tui";
+
+const addIssueCompletion = (previous: AutocompleteProvider): AutocompleteProvider => ({
+  triggerCharacters: ["#"],
+  async getSuggestions(lines, cursorLine, cursorCol, _options): Promise<AutocompleteSuggestions | null> {
+    const line = lines[cursorLine] ?? "";
+    const beforeCursor = line.slice(0, cursorCol);
+    const match = /(?:^|\s)(#[\w-]*)$/.exec(beforeCursor);
+    if (!match) return previous.getSuggestions(lines, cursorLine, cursorCol, _options);
+    const prefix = match[1];
+    const items: AutocompleteItem[] = [
+      { value: "#bug", label: "#bug", description: "Track a defect" },
+      { value: "#docs", label: "#docs", description: "Documentation work" },
+    ].filter((item) => item.value.startsWith(prefix));
+    return items.length > 0 ? { items, prefix } : null;
+  },
+  applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
+    const nextLines = [...lines];
+    const line = nextLines[cursorLine] ?? "";
+    const start = cursorCol - prefix.length;
+    nextLines[cursorLine] = `${line.slice(0, start)}${item.value}${line.slice(cursorCol)}`;
+    return { lines: nextLines, cursorLine, cursorCol: start + item.value.length };
+  },
+  shouldTriggerFileCompletion: (lines, cursorLine, cursorCol) =>
+    previous.shouldTriggerFileCompletion?.(lines, cursorLine, cursorCol) ?? false,
+});
+
+ctx.ui.addAutocompleteProvider((previous) => addIssueCompletion(previous));
+```
+
+This skeleton delegates non-`#issue` text, returns the exact text prefix it
+replaces, and preserves the previous provider's file-completion decision. A
+real provider should use the supplied `AbortSignal` for asynchronous work and
+return `null` when there are no candidates.
 
 ## Themes and semantic styling
 

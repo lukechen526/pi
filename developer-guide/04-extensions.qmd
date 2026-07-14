@@ -3,14 +3,21 @@
 An extension is a TypeScript or JavaScript module that Pi loads at runtime with
 `jiti`. Jiti resolves the module and transpiles TypeScript syntax on demand, so
 an extension does not need a separate build step; it does not bundle or
-type-check the code. The module's default export is a factory receiving
-`ExtensionAPI`. The factory registers hooks, tools, commands, shortcuts, flags,
-renderers, and providers, which Pi invokes at defined lifecycle boundaries.
+type-check the code. The module's default export is a **factory**: a function
+that receives `ExtensionAPI` and registers the extension's behavior. The factory
+registers hooks, tools, commands, shortcuts, flags,
+renderers, and providers, which Pi invokes at defined points in its runtime.
 
 Extensions execute with the permissions of the Pi process. They are trusted
 code, not a sandbox. Review a package before installing it and treat an
 extension's filesystem, process, network, and credential access as you would a
 normal local program.
+
+A **lifecycle** is the ordered sequence of events Pi emits while it loads an
+extension, runs a session, processes turns, and shuts the session down. An
+event is a named occurrence in that sequence; a hook is the extension handler
+registered to observe or affect that occurrence. The examples below use the
+public `ExtensionAPI` contract rather than internal implementation details.
 
 ## Learning path and first vocabulary
 
@@ -20,10 +27,11 @@ is a model-callable function with a validated input shape. A **context** is the
 object passed to a handler, including the session, cancellation signal, and
 possible UI.
 
-Begin with the smallest useful extension: one command that displays a notice.
-Then compare it with a tool, a hook, and durable state. The examples later in
-the chapter are larger because each adds one of those responsibilities; do not
-copy the package example until the one-file version is clear.
+Begin with a progressive one-file example rather than copying the full package
+example. First register one command that displays a notice. Then add a tool,
+then a `session_start` hook, and finally durable state. The complete example
+below shows all patterns together; read it once for each stage instead of
+copying every feature at once.
 
 ## Choose the right customization mechanism
 
@@ -38,9 +46,11 @@ Before writing code, use the smallest mechanism that owns the behavior:
 | Reuse Pi from another Node program | Coding-agent SDK (`createAgentSession`) |
 | Change generic loop/provider/TUI behavior for every consumer | Core contribution in the owning package |
 
-An extension is powerful, but do not use one to recreate or patch Pi internals
-as an unreviewed fork. Favor public `ExtensionAPI` methods over importing
-coding-agent internals.
+`AGENTS.md`, skills, and prompt templates are context-file mechanisms covered
+later in the guide; they are forward references here, not prerequisites for the
+runnable example. An extension is powerful, but do not use one to recreate or
+patch Pi internals as an unreviewed fork. Favor public `ExtensionAPI` methods
+over importing coding-agent internals.
 
 ## Discovery, trust, and loading
 
@@ -68,10 +78,17 @@ available AI models from providers but does not start a session:
 pi --list-models
 ```
 
-Start long-lived session resources in `session_start` and close them
-idempotently in `session_shutdown`.
+Start long-lived session resources in `session_start` and close them in a way
+that is safe to call more than once (idempotently) in `session_shutdown`.
 
 ## The lifecycle you can rely on
+
+In this diagram, a **factory** is the default-exported function that registers
+an extension; **session** means one loaded Pi conversation; a **turn** is one
+model request and its resulting tool work; a **provider hook** observes the
+provider-specific request boundary; and **tool execution hooks** surround a
+model-callable tool. Arrows mean “happens before,” not that every internal
+event is shown.
 
 ```text
 factory runs
@@ -100,6 +117,13 @@ ordering, see `packages/coding-agent/docs/extensions.md`; use
 
 ### Event groups and common use
 
+Read the event-group labels in plain language: **Trust/resources** decides what
+may load; **Session** opens, closes, or rebuilds session state;
+**Input/agent** turns user input into agent work; **Turn/messages** covers
+context and streaming; **Provider** is the serialized request boundary;
+**Tool** gates and observes tool calls; **AI model** tracks model choices; and
+**User shell** is the `!`/`!!` command boundary.
+
 | Event group | Representative events | Use it for |
 |---|---|---|
 | Trust/resources | `project_trust`, `resources_discover` | Decide project trust or contribute paths for skills/prompts/themes |
@@ -125,11 +149,22 @@ is a safer place to prune/inject LLM context than modifying session storage.
 payload after serialization, so changes there are not reflected by
 `ctx.getSystemPrompt()`.
 
-## A complete first extension
+## Runnable: canonical staged first extension {#a-complete-first-extension}
 
-This extension adds a `hello` tool callable by an AI model, a `/hello-pi`
-command, and a startup notification. It intentionally has no dependencies beyond Pi's bundled
-extension APIs.
+This is the chapter's single canonical extension example. It is intentionally
+small enough to run first as a command, then as a tool, and finally as a
+lifecycle hook; the listing shows the three stages together so later sections
+can refer back to one source. It adds a `hello` tool callable by an AI model, a
+`/hello-pi` command, and a startup notification.
+
+> **Runnable**
+>
+> - **Filename/location:** `~/.pi/agent/extensions/hello-pi.ts`
+> - **Command:** start `pi` in any project, then run `/hello-pi Ada`
+> - **Expected result:** startup shows `hello-pi extension is ready`; the command shows `Hello, Ada!`. The model can also call the `hello` tool.
+> - **Reload:** edit the file and run `/reload`; the new `session_start` notification confirms the reloaded factory.
+> - **Cleanup:** remove `~/.pi/agent/extensions/hello-pi.ts` when finished, then run `/reload` or restart Pi.
+> - **Permissions caution:** this file is trusted code with the same filesystem, process, network, and credential permissions as Pi. Do not run an extension you have not reviewed.
 
 1. Create the file in an auto-discovered global location:
 
@@ -256,7 +291,8 @@ For robust tools:
 - For string enums exposed to Google-compatible APIs, see
   [StringEnum vs Type.Union](#stringenum-vs-typeunion-for-string-literals).
 - Use `withFileMutationQueue(absolutePath, callback)` around the *entire*
-  read-modify-write window for a file-mutating tool.
+  read-modify-write window for a file-mutating tool. Import it from
+  `@earendil-works/pi-coding-agent`.
 
 An extension may override a built-in tool by registering the same name. That is
 an advanced compatibility commitment: preserve the built-in result `details`
@@ -286,7 +322,7 @@ Type.Object({
   recursive: Type.Optional(Type.Boolean({ default: false })),
 })
 
-// String enum (use StringEnum for Google-compatible APIs)
+// String enum for Google's Gemini API and other providers requiring enum JSON Schema
 import { StringEnum } from "@earendil-works/pi-ai";
 StringEnum(["small", "medium", "large"], { description: "Size" })
 ```
@@ -339,7 +375,9 @@ does not reach the LLM. This is the key display-versus-context choice.
 
 ## State, sessions, and queues
 
-Use this section to choose where extension state lives and how it schedules
+Branch reconstruction and durable session entries are covered in
+[Sessions and durable context](#sec:sessions). Use this section to choose where
+extension state lives and how it schedules
 work around an active agent.
 
 In-memory variables vanish on reload, resume, fork, and restart. Reconstruct
@@ -395,7 +433,8 @@ For a reusable package, declare explicit resources in `package.json`:
 ```
 
 Put third-party runtime packages in `dependencies`, not `devDependencies`:
-Pi package installation uses production installs by default. Core Pi packages
+Pi package installation uses production installs by default (npm installs
+without development dependencies). Core Pi packages
 are bundled by Pi, so list each one the package actually imports as a
 `peerDependency` with the documented `"*"` range rather than bundling a
 competing copy. The broad manifest above assumes a full-featured package that
@@ -515,8 +554,8 @@ Work from loading toward the failing behavior:
    temporary notifications to the relevant hooks in TUI mode, or concise
    logging when testing print mode. Check command names, tool names, schemas,
    and descriptions before debugging a multi-turn interaction.
-4. **Inspect model-facing state.** Run `/debug`. It writes rendered TUI lines
-   and the latest LLM messages to `~/.pi/agent/pi-debug.log`, which shows
+4. **Inspect model-facing state.** The built-in `/debug` command writes rendered
+   TUI lines and the latest LLM messages to `~/.pi/agent/pi-debug.log`, which shows
    whether tool definitions and prompt metadata reached the model.
 5. **Exercise lifecycle edges.** Run `/reload`, then test a new session,
    resume, fork, and exit when relevant. Verify `session_shutdown` cleanup and
@@ -530,11 +569,11 @@ Work from loading toward the failing behavior:
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Extension never loads | Wrong path, missing default export, or untrusted project | Check discovery conventions, export the factory as default, and establish project trust |
-| `tool_call` handler does not match | Tool name or narrowing predicate is wrong | Check `event.toolName` and `isToolCallEventType()` |
+| `tool_call` handler does not match | Tool name or type-narrowing check is wrong | Check `event.toolName` and `isToolCallEventType()` |
 | State disappears after `/reload` | State exists only in closed-over variables | Rebuild it from session entries in `session_start` |
 | RPC dialog waits indefinitely | The client does not answer `extension_ui_request` | Send the matching response or set a dialog timeout |
 | A dialog silently denies in print/JSON mode | `ctx.hasUI` was not checked | Define a noninteractive policy before calling the dialog |
-| Extension works once but fails after reload | Stale references or leaked resources | Clean up idempotently in `session_shutdown`; do not reuse the old context after `reload()` |
+| Extension works once but fails after reload | Stale references or leaked resources | Clean up safely in `session_shutdown`; do not reuse the old context after `reload()` |
 | Model never calls the tool | Weak description or missing prompt guidance | Tighten `description` and add tool-named `promptGuidelines` |
 | Parallel tools overwrite a file | The mutation bypasses Pi's per-file queue | Wrap the entire read-modify-write operation in `withFileMutationQueue` |
 
@@ -544,3 +583,10 @@ call, does not execute the tool, and does not run `tool_result` handlers for it.
 Instead, the thrown error message becomes an `isError: true` tool-result message
 stored in the session and sent to the model; the agent loop and sibling tool
 calls can continue. Test policy hooks on both allow and deny paths.
+
+## Before deployment
+
+The runnable example is a demo, not a production safety review. Before
+shipping an extension, continue with [From demo to production extension](#sec:customization)
+for safety gates, noninteractive behavior, durable state reconstruction,
+same-file mutation queues, concurrency, and the verification ladder.

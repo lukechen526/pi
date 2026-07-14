@@ -1,7 +1,9 @@
 # Guided source tours and architecture exercises {#sec:tours}
 
-The earlier chapters describe Pi's architecture. This chapter turns that map
-into repeatable reading exercises. Each tour has a question, an entry point,
+The earlier chapters describe Pi's architecture. Before starting these tours,
+read [Architecture](#sec:architecture), [Agent core](#sec:agent-core), and
+[Testing and debugging](#sec:testing). This chapter turns that map into
+repeatable reading exercises. Each tour has a question, an entry point,
 the important control-flow boundary, and a concrete outcome. Work through them
 with the source open; the purpose is to learn how the modules connect, not to
 memorize file names. All paths in this chapter are relative to the repository
@@ -22,14 +24,15 @@ the tour shows where that prediction is right and where it is incomplete.
 
 Start at `packages/coding-agent/src/cli.ts`. It assigns `process.title` to
 `APP_NAME`, sets `process.env.PI_CODING_AGENT` to `"true"`, configures the HTTP
-dispatcher early, and calls `main(process.argv.slice(2))`. Then follow
-`packages/coding-agent/src/main.ts`.
+connection manager early, and calls `main(process.argv.slice(2))`. In
+`packages/coding-agent/src/main.ts`, focus on `main()` and the call to
+`resolveAppMode()` rather than reading the entire file linearly.
 
 Trace these checkpoints:
 
 1. `parseArgs` turns raw argv into a typed argument object.
 2. `resolveAppMode` selects RPC, JSON, print, or interactive behavior from
-   explicit flags and TTY state.
+   explicit flags and TTY (terminal) state.
 3. Startup settings/trust/session inputs are prepared.
 4. `createAgentSessionRuntime` creates services and a session.
 5. `InteractiveMode`, `runRpcMode`, or `runPrintMode` receives that runtime.
@@ -44,10 +47,11 @@ Pi's own assets from its package configuration.
 working directory?
 
 Start at `packages/coding-agent/src/core/agent-session-runtime.ts`. Read
-`switchSession`, then the shared teardown/apply helpers. Follow the
-`createRuntime` factory passed from `packages/coding-agent/src/main.ts`.
+`switchSession`, then the shared teardown/apply helpers. Follow the `createAgentSessionRuntime` factory passed from
+`packages/coding-agent/src/main.ts`.
 
-Draw this before reading implementation:
+Before reading implementation, predict which objects must be replaced and
+write your own sequence. Then compare it with this verified outline:
 
 ```text
 old session + old cwd services
@@ -123,7 +127,7 @@ that sees the representation you need to change.
 **Question:** How does a provider delta become a changed terminal row?
 
 This tour is the concrete entry for the Terminal UI and interactive
-mode). Start in `packages/agent/src/agent-loop.ts` at
+mode. Start in `packages/agent/src/agent-loop.ts` at
 `streamAssistantResponse`. Find how `text_delta`, `thinking_delta`, and
 `toolcall_delta` replace the partial assistant message and emit
 `message_update`. Then walk this bridge without inventing extra stages:
@@ -231,8 +235,17 @@ event-stream parser entry points.
 **Question:** Why did a resumed model refer to an old branch or summary?
 
 Open `packages/coding-agent/src/core/session-manager.ts` and read
-`buildContextEntries` plus `buildSessionContext`. Use a small hand-drawn tree
-with a compaction entry and a branch summary. Trace the active leaf backwards,
+`buildContextEntries` plus `buildSessionContext`. Use this small tree before opening the source:
+
+```text
+root session_start
+└── user prompt
+    └── compaction summary
+        └── current assistant/tool entries  <- active leaf
+```
+
+Then add a branch summary as a sibling of the current path. Trace the active
+leaf backwards,
 then identify which entries become context messages and which are metadata
 only.
 
@@ -276,7 +289,10 @@ state.
 
 ## A weekly reading routine for new contributors
 
-The terminal user interface (TUI) is the interactive layer that turns session
+Use [Testing and debugging](#sec:testing)'s failure-localization table during
+sessions 2 and 4, and use [Agent core](#sec:agent-core)'s debugging checklist
+when a source tour reaches a stalled run. The terminal user interface (TUI) is
+the interactive layer that turns session
 events into terminal components and rendered rows. Treat it as its own reading
 boundary rather than as another name for the entire coding-agent package.
 

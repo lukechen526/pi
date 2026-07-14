@@ -7,8 +7,11 @@ fork, branch navigation, compaction, labels, and extension state without
 requiring a database.
 
 This chapter is for extension authors, embedders, and contributors debugging
-resume, branching, or context selection. If you only use Pi interactively, the
-branching and compaction sections explain the behavior you will observe.
+resume, branching, or context selection. If you only use Pi interactively, read
+the opening tree model and the one-sentence compaction summary; you can skip the
+SessionManager API table, extension persistence patterns, and split-turn details
+until you need them. See [Resources, settings, and trust](#sec:resources) for
+`sessionDir` and related configuration.
 
 It is grounded in four files:
 
@@ -41,7 +44,7 @@ with an `id` and `parentId`. One file can represent both paths.
 
 ```text
 Session file:
-  header  (metadata only: type=session, version, id, cwd, optional parentSession)
+  header  (metadata only: type=session, version, id, cwd (current working directory), optional parentSession)
           # not a tree node; has no parentId and is never selected as a leaf
 
 Entry tree (linked only by entry parentId values):
@@ -75,6 +78,14 @@ working directory:
 ~/.pi/agent/sessions/--<encoded-cwd>--/<timestamp>_<uuid>.jsonl
 ```
 
+The `<encoded-cwd>` name comes from `getDefaultSessionDirPath()`, not URL
+encoding. Pi resolves the cwd, strips one leading slash or backslash,
+replaces every slash, backslash, or colon with `-`, and wraps the result in
+`--`. For example,
+`/work/project` becomes `--work-project--`; the separators are only a safe
+filesystem-directory name, not a reversible URL representation. A custom
+`sessionDir` bypasses this cwd-derived directory name.
+
 Each persisted session is a `.jsonl` file. Its first line is a file header, for
 example:
 
@@ -90,8 +101,11 @@ session began, and optional `parentSession` records fork provenance only.
 Session storage and other options are ordinary nested keys in settings JSON,
 not filesystem path conventions. Global settings live in
 `~/.pi/agent/settings.json`; project settings live in `.pi/settings.json` and
-override the global file for the same keys. Nested objects merge, so a project
-can set only the fields it needs.
+override the global file for the same keys. Object-valued settings are combined
+at their top level, so a project can set one field such as
+`compaction.reserveTokens` while retaining other fields in the global
+`compaction` object; this is not a recursive merge of deeper objects. Arrays
+remain replacement values rather than being combined.
 
 Override the session directory with:
 
@@ -192,17 +206,35 @@ apply the latest effective compaction boundary
 context entries for rendering and conversion
 ```
 
-Without compaction, that active path is the selected context. After compaction,
+When no compaction entry exists, that active path passes through unchanged and
+becomes the selected context. After compaction,
 Pi substitutes the summary for the older span and keeps entries beginning at
-`firstKeptEntryId`. Replaced records remain in JSONL for history but are not
-sent to the LLM.
+[`firstKeptEntryId`](#sec:split-turns). This field stores the ID of the first
+retained entry, not an array index: the context builder follows the active
+parent chain, inserts the compaction summary, then retains that entry and the
+later entries on the chain. Replaced records remain in JSONL for history but
+are not sent to the LLM.
 
 `buildSessionContext()` also scans the full path to restore the current model
 and thinking level, then converts selected entries to messages. It omits
 `custom` entries, so private extension state added with `pi.appendEntry()` does
 not consume provider context.
 
+The exported `convertToLlm()` transformer in
+`packages/coding-agent/src/core/messages.ts` performs the provider-boundary
+projection. It passes ordinary `user`, `assistant`, and `toolResult` messages
+through; turns bash-execution, custom, branch-summary, and compaction-summary
+messages into user messages; and drops bash executions marked
+`excludeFromContext`. The result is the normalized `Message[]` shape expected
+by the provider layer, while the original session entries remain richer and
+persisted.
+
 ## Compaction is a controlled replacement of old context
+
+**Compaction in one sentence:** when the model context is nearly full, Pi
+summarizes older context into a durable entry and continues with the summary
+plus recent entries. The split-turn details below are primarily for debugging
+and extension interception.
 
 Context windows are finite. Auto-compaction triggers when:
 
@@ -224,8 +256,9 @@ on disk; only provider context is replaced.
 
 An extension can intercept `session_before_compact` to cancel compaction or
 provide a custom summary, then observe the result through `session_compact`.
+See the [extension event reference](#sec:events) for the complete event shape.
 
-### Split turns and tool continuity
+### Split turns and tool continuity {#sec:split-turns}
 
 Normally a compaction cut sits at a turn boundary. A turn begins with a user
 message and includes the assistant's response and resulting tool calls until
@@ -289,7 +322,8 @@ summary with `session_before_tree` and observe the result with `session_tree`.
 
 New, resume, and fork flows go through `AgentSessionRuntime`. That object owns
 the current `AgentSession` and cwd-bound services such as settings, resources,
-models, and auth. Replacement deliberately tears the old runtime down and
+models, and auth. Here, **cwd-bound** means scoped to the session's current
+working directory. Replacement deliberately tears the old runtime down and
 builds a new one for the destination session; it does not mutate the previous
 session object into a new identity.
 

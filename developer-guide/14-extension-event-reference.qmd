@@ -1,9 +1,12 @@
 # Extension event and API reference {#sec:events}
 
-This chapter is a practical reference for choosing extension hooks. It does not
-replace the source types in `packages/coding-agent/src/core/extensions/types.ts`
-or the exhaustive `packages/coding-agent/docs/extensions.md`; use those when
-writing code. Its goal is to make event choice, return value, context, and
+This chapter is a practical reference for choosing extension hooks. Read
+[Extensions](#sec:extensions) first for registration and tool basics, [Built-in
+tools](#sec:tools) for tool lifecycle, [Models](#sec:models) for provider hooks,
+and [Run modes](#sec:modes) for mode-specific behavior. It does not replace the
+source types in `packages/coding-agent/src/core/extensions/types.ts` or the
+exhaustive `packages/coding-agent/docs/extensions.md`; use those when writing
+code. Its goal is to make event choice, return value, context, and
 lifecycle safety explicit before implementation.
 
 ## Use this chapter as an index
@@ -51,6 +54,15 @@ The rows describe different capabilities, not aliases. For example, a context
 filter changes Pi's model-message view, whereas provider hooks operate only at
 the serialized request boundary. Durable session hooks change neither unless
 their operation rebuilds the active context.
+
+### `user_bash`
+
+`user_bash` is the direct-user shell path for commands beginning with `!`. It is
+not the model `bash` tool path. A handler receives the command and context and
+can observe, block, or choose whether output enters model context according to
+the documented event return shape. Test this path separately from
+`tool_call`/`tool_result`; a sandbox that covers only model tools does not cover
+commands typed directly by a user.
 
 ## Startup and trust events
 
@@ -151,7 +163,8 @@ pi.on("session_compact", (event) => {
 ```
 
 A session is a tree of durable entries linked by `id` and `parentId`; the
-current leaf selects the root-to-leaf branch used for context. `/tree`
+current leaf (the selected last entry) selects the root-to-leaf branch used for
+context. `/tree`
 navigation moves that leaf within the same session file and may summarize the
 branch being left. `session_before_tree` can cancel or provide that branch
 summary; `session_tree` observes the selected leaf and summary outcome.
@@ -199,13 +212,16 @@ expansion. The result controls the next step:
 
 Transforms chain in extension load order. Keep transforms simple and make
 source-aware decisions with `event.source` (`interactive`, `rpc`, or
-`extension`). During streaming, `event.streamingBehavior` distinguishes steer
-and follow-up queue delivery.
+`extension`). During streaming, `event.streamingBehavior` distinguishes
+**steering** (injecting a message before the next provider request) from a
+**follow-up** (queueing a message after the current run settles).
 
 ### `before_agent_start`
 
 This runs after normal input expansion but before the low-level agent loop. It
-is the best prompt-scoped seam. A result may add a custom persistent message
+is the best prompt-scoped seam. A handler returns an optional object containing
+custom messages and/or chained system-prompt options; returning nothing leaves
+the prepared prompt unchanged. A result may add a custom persistent message
 and/or replace the chained system prompt. Later handlers receive system-prompt
 changes from earlier handlers.
 
@@ -251,9 +267,9 @@ Pi assembles outgoing headers, then gives handlers a mutable map. Assign a
 string to add/override, or `null` to delete. The hook runs once per provider
 request; retries reuse the same headers rather than invoking it again.
 
-Use it for a stable request correlation header. Do not use it for a credential
-refresh protocol that must run anew on every retry unless you explicitly own
-that behavior.
+Use it for a stable request correlation header, such as an `X-Request-Id` value
+chosen by the host. Do not use it for a credential refresh protocol that must
+run anew on every retry unless you explicitly own that behavior.
 
 ### `before_provider_request`
 
@@ -282,12 +298,14 @@ The tool execution path separates observation, policy, and patching:
 | `tool_execution_end` | Observation: finalized execute result | Read `result` and `isError` |
 
 `tool_execution_*` handlers are observation-only: they do not cancel execution
-or rewrite output. Do not confuse the extension event `tool_result` with
-`toolResult` messages. `tool_result` is an extension hook that can patch the
-result before it is committed (`content`, `details`, and/or `isError`; omitted
-fields keep their current values). A `toolResult` message is the durable
-transcript entry (`role: "toolResult"`) that appears later as
-`message_start`/`message_end` and in the session file.
+or rewrite output. Keep the spelling and layer distinction exact:
+`tool_result` (snake case) is an extension event, while `toolResult` (camel
+case) is a message role. The `tool_result` hook can patch the result before it
+is committed (`content`, `details`, and/or `isError`; omitted fields keep their
+current values). A `toolResult` message is the durable transcript entry
+(`role: "toolResult"`) that appears later as `message_start`/`message_end` and
+in the session file. A hook can therefore affect the message that follows, but
+it is not itself that message.
 
 The default parallel execution order is subtle:
 
@@ -311,10 +329,14 @@ pi.on("tool_call", (event) => {
 });
 ```
 
-For a custom tool, derive the TypeBox input type with `Static` from the
-`typebox` package (a direct dependency of coding-agent; not re-exported from
-`@earendil-works/pi-coding-agent`) and supply explicit generic parameters to the
-guard:
+For a custom tool, derive the TypeBox input type with `Static`. TypeBox is a
+runtime validation library covered in [TypeScript basics](#sec:typescript).
+The canonical extension documentation imports `Type` and `Static` from the
+direct `typebox` package because an extension declares that schema dependency.
+Code that already depends on `@earendil-works/pi-ai` may instead use its public
+root re-exports of `Type` and `Static`. Both paths are valid, but
+`@earendil-works/pi-coding-agent` does not re-export TypeBox. Supply explicit
+generic parameters to the guard:
 
 ```ts
 import { Type, type Static } from "typebox";

@@ -1,18 +1,24 @@
 # Failure and recovery reference {#sec:failure}
 
 Pi turns many failures into explicit protocol data instead of allowing an
-exception to escape through every layer. This operational reference is for
-extension authors and contributors debugging failures or designing recovery;
+exception to escape through every layer. Read [Extensions](#sec:extensions),
+[Resources and trust](#sec:resources), and [TUI](#sec:tui) when the lookup below
+points to those owners. This operational reference is for extension authors and contributors debugging failures or designing recovery;
 it is a symptom-to-owner lookup, not a step-by-step tutorial.
 
 ## How to use the reference
 
-An **error** means an operation failed. An **abort** means work was stopped by
-an explicit cancellation request. A **retry** starts another attempt, while
-**recovery** can also mean returning an actionable tool result or falling back
-to a safe renderer. Start with the first layer where the symptom appears, then
-follow the owning layer's recovery action; do not retry before deciding which
-kind of failure you have.
+Use these definitions when reading the tables below:
+
+- **Error:** an operation failed and reports failure data.
+- **Abort:** work stopped because an explicit cancellation request propagated
+  through an abort signal.
+- **Retry:** another provider/agent attempt starts after a failed attempt.
+- **Recovery:** a broader safe response, such as an actionable tool result,
+  compaction-and-retry, or a fallback renderer.
+
+Start with the first layer where the symptom appears, then follow that layer's
+recovery action; do not retry before deciding which kind of failure you have.
 
 For example, malformed tool arguments should become a tool error the model can
 correct, while a missing API key must be fixed in model/auth configuration.
@@ -27,6 +33,7 @@ configuration/trust failure
 model/provider failure
   -> final assistant message: error or aborted
   -> AgentSession retry/compaction policy may decide next action
+     (automatic retry, compaction-and-retry, or final failure)
 
 tool validation/execution failure
   -> error ToolResultMessage
@@ -97,9 +104,13 @@ Tool processing has several failure points:
 | Abort occurs before/during work | Error result indicating cancellation |
 | `tool_result` hook throws | Error result rather than a malformed patched result |
 
-The loop emits a tool-result message after execution and `tool_result` hooks
-finish (successful or error-path finalization). A model can inspect the result,
-modify its arguments, call another tool, or explain the failure.
+The loop emits a durable `toolResult` message after execution and the
+`tool_result` extension hook finishes (successful or error-path finalization).
+These are different: `tool_result` is the patchable extension event, while
+`toolResult` is the transcript message role that the model receives. See the
+[extension event reference](#sec:events) for ordering and payloads. A model can
+inspect the resulting message, modify its arguments, call another tool, or
+explain the failure.
 Make tool error strings actionable: include an invalid path, missing exact
 text, exit code, timeout, or next command when safe. Do not put credentials
 or other secret values in a tool error message; the model and transcript both
@@ -126,23 +137,27 @@ than leaving a detached process behind.
 Compaction/retry is recovery from context pressure, not from every provider
 error. `firstKeptEntryId` is the ID of the earliest session entry retained
 verbatim after compaction; entries before it are represented by the summary.
-A custom compaction extension that intercepts `session_before_compact` must
-return a `SessionBeforeCompactResult`. To replace the summary, set `compaction`
-to a `CompactionResult` shaped as
+The event payloads and cancellation/custom-summary return shape are indexed in
+the [extension event reference](#sec:events). A custom compaction extension
+that intercepts `session_before_compact` must return a
+`SessionBeforeCompactResult`. To replace the summary, set `compaction` to a
+`CompactionResult` shaped as
 `{ summary, firstKeptEntryId, tokensBefore, details? }`. To abort compaction,
 return `{ cancel: true }`. To keep the default summary from
 `prepareCompaction`/`compact`, omit `compaction`. Changing or omitting the
 `firstKeptEntryId` boundary can make context rebuilding retain the wrong
 entries or omit the intended ones.
 
-Tree navigation changes the active leaf. An extension that reconstructs state
+Tree navigation changes the active leaf (the selected last entry on the active
+branch). An extension that reconstructs state
 from `getEntries()` instead of the active branch may accidentally recover state
 from an abandoned path. This can look like a failure after `/tree` even though
 session persistence behaved correctly.
 
 ## UI and renderer fallback
 
-Renderers are presentation code. If a custom tool/message renderer throws, Pi
+A renderer is a function or component that converts tool output or message
+content into TUI display elements. If a custom tool/message renderer throws, Pi
 falls back to basic rendering for that slot where supported. Treat a fallback
 as a diagnostic, not evidence that result data is correct. Inspect the original
 content/details and renderer context, then make the renderer handle partial,
@@ -157,12 +172,14 @@ occupy bytes but no visible columns), not to agent or session data.
 
 ## Incident checklist
 
-For a reliable bug report or regression test, record:
+Before filing a bug report or writing a regression test, capture the following:
 
 1. Mode, cwd, trust state, session ID/path, and selected model.
 2. The input/event that triggered the problem.
 3. Whether it was idle, streaming, compacting, or replacing a session.
-4. The relevant final stop reason/tool result error.
+4. The relevant final stop reason/tool result error. A `stopReason` records why
+the final assistant message stopped, such as normal completion, an error, or
+an abort.
 5. Sanitized provider status/headers if applicable.
 6. Active tools and extension/resource provenance.
 7. Whether Esc/reload/new/resume changes the behavior.

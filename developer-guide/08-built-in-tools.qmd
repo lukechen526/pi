@@ -2,9 +2,12 @@
 
 Pi ships seven named tools: `read`, `bash`, `edit`, `write`, `grep`, `find`,
 and `ls`. Together they cover filesystem access and mutation, shell execution,
-and bounded repository discovery. Each built-in is a tool definition with a
-TypeBox parameter schema that Pi wraps as an `AgentTool`, placing built-ins and
-extension-provided tools in the same lifecycle.
+and bounded repository discovery. The session's **cwd** (current working
+directory) is the base directory used to resolve relative tool paths; it is not
+necessarily the process directory of the host embedding Pi. Each built-in is a
+tool definition with a TypeBox parameter schema that Pi wraps as an
+`AgentTool`, placing built-ins and extension-provided tools in the same
+[agent loop](#sec:agent-core) lifecycle.
 
 Implementation lives in `packages/coding-agent/src/core/tools/`. The public
 construction helpers are re-exported from the
@@ -48,7 +51,14 @@ Pi's SDK creates all definitions so extensions can inspect their metadata, but
 the initial active set contains the four coding tools: `read`, `bash`, `edit`,
 and `write`. `grep`, `find`, and `ls` remain available definitions outside that
 default active list. Explicit tool selection, `--no-builtin-tools`, extensions,
-or `pi.setActiveTools()` can change what the model receives.
+or `pi.setActiveTools()` can change what the model receives. For example:
+
+```ts
+const active = pi.getActiveTools();
+pi.setActiveTools([...new Set([...active, "grep", "find", "ls"])]);
+```
+
+This changes the model-facing tool set; it is not merely a UI filter.
 
 ## Shared design principles
 
@@ -91,7 +101,7 @@ partial output for a complete result.
 
 `read.ts` accepts a required `path` plus optional 1-indexed `offset` and
 `limit`. It resolves the path relative to the session cwd, checks readability,
-then branches on MIME detection.
+then branches on MIME (media type) detection.
 
 For text files, `read` splits lines, applies the requested range, and then
 applies shared truncation. The continuation messages are deliberately specific:
@@ -218,7 +228,7 @@ Pi exposes all three as built-in names that an extension can register and
 activate. When overriding one, retain its result details and renderer contract
 unless the extension also supplies every affected display and session behavior.
 
-## Paths, cwd, and remote operations
+## Paths and remote operations
 
 Tools must distinguish what the model typed from the actual target path. The
 built-ins resolve relative paths against the session cwd, not an arbitrary
@@ -228,10 +238,10 @@ Remote execution can preserve structured tool calls. The exported operations
 interfaces make each tool's I/O replaceable:
 
 ```text
-ReadOperations    readFile + access + optional MIME detection
+ReadOperations    readFile + access + optional MIME (media type) detection
 WriteOperations   mkdir + writeFile
 EditOperations    readFile + writeFile + access
-BashOperations    exec with data callback, cwd, signal, timeout, env
+BashOperations    exec(command, cwd, env, signal, timeout, onData)
 Grep/Find/Ls      operation interfaces for filesystem/search behavior
 ```
 
@@ -245,14 +255,23 @@ documentation's SSH and sandbox examples demonstrate this pattern.
 
 ## User shell commands are separate from model `bash`
 
+The separate `user_bash` path matters when an extension must govern both direct
+user commands and model-generated shell calls.
+
 In interactive mode, input beginning with `!` runs a user shell command;
 `!!` marks its result excluded from LLM context. The extension `user_bash`
 event can provide custom operations or a complete result for the user-command
 path.
 
-User shell commands and assistant `bash` calls follow distinct paths. The user
-directly requests a `!` command, while the model generates a tool call that Pi
-records in the assistant/tool-result protocol. A sandbox extension should cover
+User shell commands and assistant `bash` calls follow distinct paths:
+
+```text
+user types !command -> user_bash event -> user shell
+model requests bash -> tool_call -> tool_execution_start -> bash -> tool result
+```
+
+The user directly requests a `!` command, while the model generates a tool call
+that Pi records in the assistant/tool-result protocol. A sandbox extension should cover
 both paths by supplying sandboxed operations for built-in tools and
 `user_bash`.
 
@@ -341,6 +360,15 @@ async function replaceOnce(
 
 In a real tool, add a TypeBox schema, precise description, result content,
 truncation where relevant, and tests for no-match, abort, and concurrent calls.
+
+## Common tool failures
+
+| Symptom | Likely cause | First check |
+|---|---|---|
+| `read` says the file is missing | wrong cwd or path | resolve the path from the tool's cwd |
+| `edit` rejects the operation | old text is not unique or no longer matches | inspect the current file and use a precise replacement |
+| `bash` times out | command is long-running or ignored the signal | pass cancellation and choose an appropriate timeout |
+| `grep`/`find` returns nothing | ignore rules or glob mismatch | verify the pattern and search root |
 
 ## Tool-author review questions
 
