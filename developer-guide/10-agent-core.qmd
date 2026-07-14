@@ -1,8 +1,10 @@
 # Agent core: runs, events, queues, and tool batches {#sec:agent-core}
 
-`packages/agent` is the reusable runtime beneath the coding agent. It knows
-about a model, a system prompt, messages, tools, streaming, queues, and
-cancellation. It deliberately does not know about JSONL sessions, themes,
+`packages/agent` is the reusable runtime beneath the coding agent. It owns the
+model loop, message state, tool execution, streaming, queues, and cancellation.
+Read [Prompt lifecycle](#sec:prompt-lifecycle) before this chapter for the
+end-to-end path, and use [TypeScript used by Pi](#sec:typescript) when a type
+signature is unfamiliar. It deliberately does not know about JSONL sessions, themes,
 project trust, extensions, or built-in filesystem tools.
 
 The central source files are `packages/agent/src/agent.ts`,
@@ -18,6 +20,27 @@ send another turn. The `Agent` class owns changing state around that cycle;
 Keep two cases in mind. A text-only answer finishes after one provider stream.
 A tool-using answer returns to the provider after each tool batch. The rest of
 the chapter explains the events and queues that make both cases observable.
+
+## Event stream as the observable protocol
+
+The loop emits events rather than updating a UI directly. Important event
+families are:
+
+| Events | Meaning |
+|---|---|
+| `agent_start`, `agent_end` | One low-level run begins/ends |
+| `turn_start`, `turn_end` | A provider response plus any tool batch |
+| `message_start`, `message_update`, `message_end` | User, assistant, and tool-result message lifetime |
+| `tool_execution_start`, `tool_execution_update`, `tool_execution_end` | Tool row/process lifetime |
+
+`Agent.processEvents()` first updates internal state, then awaits registered
+listeners. This ordering means a listener sees a coherent agent state through
+the event it is handling. Coding-agent relies on that property when syncing
+session entries and calling extension hooks.
+
+The [extension event reference](#sec:events) is canonical for payloads and
+ordering guarantees; this chapter uses the event stream to explain the runtime
+control flow.
 
 ## The three layers inside the package
 
@@ -35,15 +58,28 @@ the caller cannot supply a valid hook/tool/message shape, start in `types.ts`.
 
 The `Agent` holds state including:
 
-- current system prompt, model, thinking level, and active tools
+- current system prompt, model, **thinking level**, and active tools. A thinking
+  level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`) requests a
+  model's reasoning budget; see [Models](#sec:models) for capability mapping.
 - durable messages accumulated in this runtime
 - streaming message and pending tool IDs for UI observers
 - active run/abort controller
-- steering and follow-up message queues
+- a **steering message queue**, whose messages are injected after the current
+  assistant turn and tool batch but before the next provider request
+- a **follow-up message queue**, whose messages are considered only after no
+  tool calls or steering messages remain and the run would otherwise stop
 - event listeners and optional caller hooks
+
+`Agent.steer()` adds to the first queue; `Agent.followUp()` adds to the second.
+This distinction is the queue boundary used by the loop, not merely a UI key
+binding. Coding-agent's `AgentSession` wraps this reusable controller with
+JSONL persistence, extensions, and session-level retry/compaction behavior; see
+[Prompt lifecycle](#sec:prompt-lifecycle) and [Sessions and context](#sec:sessions).
 
 Before a prompt starts, `createContextSnapshot()` copies the `messages` and
 `tools` arrays with `slice()` and captures the current system-prompt string.
+In plain terms, it copies the array containers but not the objects inside them;
+treat messages and tool definitions as immutable during a run.
 This is an array snapshot, not a deep clone: the message objects, their nested
 content blocks, and the tool definition objects remain shared with agent state.
 
@@ -142,22 +178,59 @@ event, not an event in the `packages/agent` `AgentEvent` union. Extension
 authors who need Pi as a whole to be idle should observe `agent_settled`; see
 [Extension event reference: `agent_start`, `agent_end`, and `agent_settled`](#sec:agent-events).
 
-## Event stream as the observable protocol
+## Runnable offline example
 
-The loop emits events rather than updating a UI directly. Important event
-families are:
+This listing uses the current explicit provider-collection APIs. The faux
+provider is deterministic and local: it needs no API key or network. It prints
+the final assistant content and records the two event families that matter for
+an observer. Save it as `agent-faux-example.ts` in the repository root and run
+it with `npx tsx agent-faux-example.ts`.
 
-| Events | Meaning |
-|---|---|
-| `agent_start`, `agent_end` | One low-level run begins/ends |
-| `turn_start`, `turn_end` | A provider response plus any tool batch |
-| `message_start`, `message_update`, `message_end` | User, assistant, and tool-result message lifetime |
-| `tool_execution_start`, `tool_execution_update`, `tool_execution_end` | Tool row/process lifetime |
+```ts
+import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+import { Agent } from "@earendil-works/pi-agent-core";
 
-`Agent.processEvents()` first updates internal state, then awaits registered
-listeners. This ordering means a listener sees a coherent agent state through
-the event it is handling. Coding-agent relies on that property when syncing
-session entries and calling extension hooks.
+const faux = fauxProvider();
+const models = createModels();
+models.setProvider(faux.provider);
+faux.setResponses([fauxAssistantMessage("offline hello")]);
+
+const agent = new Agent({
+	initialState: { model: faux.getModel(), systemPrompt: "", messages: [] },
+	streamFn: (model, context, options) => models.streamSimple(model, context, options),
+});
+
+const observed: string[] = [];
+const unsubscribe = agent.subscribe((event) => {
+	if (event.type === "message_update") {
+		observed.push(event.type);
+	}
+	if (event.type === "agent_end") {
+		observed.push(event.type);
+		const finalMessage = event.messages[event.messages.length - 1];
+		if (finalMessage?.role === "assistant") {
+			console.log(finalMessage.content);
+		}
+	}
+});
+
+try {
+	await agent.prompt("Say hello.");
+	await agent.waitForIdle();
+	console.log({
+		sawMessageUpdate: observed.includes("message_update"),
+		sawAgentEnd: observed.includes("agent_end"),
+	});
+} finally {
+	unsubscribe();
+	models.deleteProvider(faux.provider.id);
+}
+```
+
+Expected output includes `[{ type: "text", text: "offline hello" }]` and
+`{ sawMessageUpdate: true, sawAgentEnd: true }`. The final unsubscribe and
+provider deletion matter in a long-lived host: event listeners and provider
+registrations are runtime resources, even when this one-shot example exits.
 
 ## One provider turn in detail
 
@@ -191,8 +264,18 @@ optional `prepareArguments`, then validates the result against the tool schema.
 
 `prepareArguments` exists for session compatibility. An extension/tool can
 adapt legacy stored call shapes into its current strict schema before validation
-without weakening the public parameters declaration. It is not a general way to
-accept arbitrary invalid input.
+without weakening the public parameters declaration. For example, an old call
+might use `file` while the current schema expects `path`:
+
+```ts
+prepareArguments: (args) => ({
+  path: typeof args === "object" && args !== null && "file" in args
+    ? String(args.file)
+    : "",
+})
+```
+
+It is not a general way to accept arbitrary invalid input.
 
 An unknown tool, invalid schema, hook failure, or explicit block becomes an
 immediate error result rather than a crash. The model receives that error in a
@@ -300,13 +383,17 @@ sees the refreshed session snapshot rather than a stale configuration.
 The `StreamFn` contract says ordinary request/model/runtime failures should be
 represented by a returned assistant event stream whose final message has
 `stopReason: "error"` or `"aborted"`, rather than a rejected promise. The
+common stop reasons are `"stop"` (normal completion), `"toolUse"` (the model
+requested tools), `"length"` (context or output limit), `"error"`, and
+`"aborted"`. The
 agent also protects itself by converting unexpected throws into a final
 assistant error message.
 
 Tool failures are different: execute throws become an error `toolResult`, so a
 model can read output/error and choose a recovery. This difference is important
 for tests and UI: a provider failure ends the run; a tool failure usually lets
-the model continue.
+the model continue. Context pressure can trigger compaction above this package;
+see [Sessions and context](#sec:sessions) for the summary-and-retry path.
 
 ## Embedding the agent package
 
@@ -320,13 +407,17 @@ coding-agent normally supplies:
 - context transformation/queue behavior appropriate to your application
 - tool definitions and any permission gate
 
-The package gives a rigorous loop, not a complete coding application. That is
-the reason Pi can support the interactive CLI, SDK examples, and other hosts
+The package gives a rigorous loop, not a complete coding application. See the
+[guided source tours](#sec:tours) for a concrete integration trace. That is the
+reason Pi can support the interactive CLI, SDK examples, and other hosts
 without coupling all of them to terminal/session decisions.
 
 ## Agent-core debugging checklist
 
-When a turn misbehaves, capture these facts before editing code:
+When a turn misbehaves, capture these facts before editing code. For example,
+if a tool never executes, first determine whether the model emitted a tool call,
+whether validation passed, and whether `execute()` was entered; do not start by
+changing provider code.
 
 1. What did `convertToLlm` produce?
 2. What system prompt and active tools were in the context snapshot?

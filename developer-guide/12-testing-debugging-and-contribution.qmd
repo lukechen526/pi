@@ -2,7 +2,8 @@
 
 This chapter turns the system map from [Architecture](#sec:architecture) into a
 practical workflow for reproducing failures, choosing tests, and preparing a
-change for review. Pi's repository rules distinguish code checks, targeted
+change for review. Before code changes, read [Extensions](#sec:extensions) for
+extension surfaces and [Agent core](#sec:agent-core) for loop ownership. Pi's repository rules distinguish code checks, targeted
 tests, interactive testing, and real-provider behavior. Use the narrowest
 validation path that exercises the behavior. A local state transition does not
 require a provider call.
@@ -55,7 +56,7 @@ state, and runs the root TypeScript check. It is a broad code-quality gate, not
 the test suite.
 
 `npm run build` only compiles packages; it is not a test suite. Tests verify
-behavioral expectations. The full Vitest suite can activate end-to-end tests when
+behavioral expectations. The full Vitest (the project's test framework) suite can activate end-to-end tests when
 provider or authentication environment variables are present. To avoid that
 and get broad non-LLM coverage, use `./test.sh` from the repository root. For a
 targeted coding-agent test, run the Vitest CLI from the package root as
@@ -69,12 +70,117 @@ described by `AGENTS.md`.
 | Agent tool scheduling/message events | `packages/agent` tests or harness tests |
 | TUI width, key, component behavior | `packages/tui/test/` |
 | Coding-agent sessions/config/extensions | `packages/coding-agent/test/` |
-| Agent behavior without a paid provider | `packages/coding-agent/test/suite/` with faux provider |
+| Agent behavior without a paid provider | `packages/coding-agent/test/suite/` with the faux provider |
 
-The coding-agent suite harness is intentional. For tests under
+The **faux provider** is a deterministic test double: it returns scripted model
+responses without network calls, so agent-behavior tests run offline and
+repeatably. The coding-agent suite harness is intentional. For tests under
 `packages/coding-agent/test/suite/`, use `test/suite/harness.ts` and the faux
 provider. Real model keys introduce cost, nondeterminism, rate limits, and a
 different failure surface than the behavior being tested.
+
+## Your first faux-provider test
+
+This is a complete offline suite test. Copy it to
+`packages/coding-agent/test/suite/guide-faux-provider.test.ts`:
+
+```ts
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { describe, expect, it } from "vitest";
+import { createHarness, getMessageText } from "./harness.ts";
+
+describe("guide faux-provider example", () => {
+  it("runs one deterministic response through AgentSession", async () => {
+    const harness = await createHarness();
+    try {
+      harness.setResponses([fauxAssistantMessage("offline response")]);
+      await harness.session.prompt("hello from the test");
+
+      expect(harness.session.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+      expect(getMessageText(harness.session.messages[0])).toBe("hello from the test");
+      expect(getMessageText(harness.session.messages[1])).toBe("offline response");
+      expect(harness.eventsOfType("agent_end")).toHaveLength(1);
+      expect(harness.getPendingResponseCount()).toBe(0);
+    } finally {
+      harness.cleanup();
+    }
+  });
+});
+```
+
+Run it from `packages/coding-agent` (the package root):
+
+```bash
+node ../../node_modules/vitest/dist/cli.js --run test/suite/guide-faux-provider.test.ts
+```
+
+The stages are deliberate:
+
+1. **Arrange:** `createHarness()` installs an in-memory session and the faux
+   provider; `setResponses()` scripts exactly one response.
+2. **Act:** `AgentSession.prompt()` runs the real prompt preprocessing and agent
+   loop, without a network request or external provider credential.
+3. **Assert:** check durable message roles/text, an `agent_end` event, and that
+   no scripted response remains pending.
+4. **Clean up:** `finally` disposes the session, unregisters the faux provider,
+   and removes the harness temporary directory.
+
+The test uses no real provider, API key, network call, or paid token (the
+harness's in-memory `faux-key` is only a local test value). Keep the
+source-verified harness API in sync with
+`packages/coding-agent/test/suite/harness.ts`; do not replace it with a guessed
+SDK shortcut.
+
+### A compact regression pattern
+
+For an issue-specific regression, use
+`packages/coding-agent/test/suite/regressions/<issue>-<slug>.test.ts`, for
+example `regressions/3317-network-connection-lost-retry.test.ts`. Keep the test
+focused and assert the observable event, not only a private counter:
+
+```ts
+harness.setResponses([
+  fauxAssistantMessage("", { stopReason: "error", errorMessage: "Network connection lost." }),
+  fauxAssistantMessage("recovered"),
+]);
+await harness.session.prompt("test");
+expect(harness.eventsOfType("auto_retry_end").map((event) => event.success)).toEqual([true]);
+```
+
+## Your first contribution
+
+The following scenario is illustrative: it is a workflow example, not a claim
+about a current issue. Use it for a small change such as making a tool error
+more actionable.
+
+1. Classify the intended seam with [Architecture](#sec:architecture): decide
+   whether the behavior belongs to the agent loop, a tool, an extension hook,
+   the session/runtime, or the TUI.
+2. Locate the owning symbol and its call sites. Use `rg` (ripgrep, a fast
+   repository search tool), or another search tool, then read the symbol's
+   implementation and a nearby test.
+3. Write the smallest focused failing test in the owning package. For coding
+   agent behavior, prefer the faux-provider harness above; for an issue
+   regression use `test/suite/regressions/<issue>-<slug>.test.ts`.
+4. Make the smallest change that makes the test pass. Preserve public event
+   and message contracts unless the change explicitly updates them.
+5. Run the targeted test from the package root with the actual Vitest command,
+   for example:
+   `node ../../node_modules/vitest/dist/cli.js --run test/suite/guide-faux-provider.test.ts`.
+6. For code changes, run `npm run check` from the repository root. This is the
+   static/type/dependency check, not a replacement for the focused test.
+7. Inspect `git diff --check` and the diff for unrelated files, generated
+   metadata, lockfiles, secrets, and accidental broad behavior changes.
+8. Apply the existing pre-review checklist below: reproduce the original
+   behavior, name the owning package/contract, run the narrow proof, check
+   trust/security, cover cancellation/error/reload paths where relevant, and
+   inspect the final diff.
+
+A documentation-only change follows the same source-reading discipline, but
+its interface is the rendered guide: use `quarto render developer-guide`, check
+links and warnings, and verify every runnable listing against the checkout.
+This “documentation as a tested interface” rule is for guide contributors; it
+does not turn documentation edits into product tests.
 
 ## High-value test cases by subsystem
 
@@ -98,7 +204,7 @@ different failure surface than the behavior being tested.
 
 ### Sessions and compaction
 
-- JSONL loading/migration and malformed input.
+- JSONL (newline-delimited JSON) loading/migration and malformed input.
 - Tree path selection and label/session-info changes.
 - Context rebuild with compaction and branch summaries.
 - Model/thinking restoration.
@@ -114,7 +220,7 @@ different failure surface than the behavior being tested.
 
 ## Interactive TUI smoke testing
 
-`AGENTS.md` documents a controlled tmux pattern for testing the interactive
+`AGENTS.md` documents a controlled tmux (terminal multiplexer) pattern for testing the interactive
 application. The important principle is to use a detached terminal with known
 dimensions, capture the pane after startup, send text/keys, then cleanly kill
 the session. This produces a repeatable artifact for editor, command,
@@ -123,11 +229,24 @@ terminal state.
 
 For a UI reproduction, record dimensions, theme/keybindings, exact input and
 keys, model/streaming state, and captured lines or a `/debug` log. Screenshots
-alone often omit what is needed to reproduce a visual bug.
+alone often omit what is needed to reproduce a visual bug. A condensed smoke
+sequence is:
+
+```bash
+tmux new-session -d -s pi-test -x 80 -y 24
+tmux send-keys -t pi-test "./pi-test.sh" Enter
+sleep 3 && tmux capture-pane -t pi-test -p
+tmux send-keys -t pi-test "say exactly: ok" Enter
+sleep 3 && tmux capture-pane -t pi-test -p
+tmux kill-session -t pi-test
+```
+
+Run this from the checkout, where `./pi-test.sh` is available. Always kill the
+detached session in cleanup.
 
 ## `/debug` and diagnostic data
 
-The hidden `/debug` command writes `~/.pi/agent/pi-debug.log` with rendered TUI
+In interactive mode, type `/debug` as a built-in slash command. It writes `~/.pi/agent/pi-debug.log` with rendered TUI
 lines containing ANSI codes and the last messages sent to the LLM. Comparing
 those two views can reveal whether a mismatch arose before or during rendering.
 The log may contain sensitive prompts, file contents, and tool results, so
@@ -180,7 +299,9 @@ between catalog data and its generation process.
 
 ## Documentation as a tested interface
 
-This guide is source-grounded documentation. Keep its code examples subject to
+This guide is source-grounded documentation. For documentation-only changes,
+render it with `quarto render developer-guide` from the repository root. Keep
+its code examples subject to
 the same review questions as implementation:
 
 1. Does every exported symbol exist at the documented package path?
@@ -197,7 +318,11 @@ reveals contradictions between isolated component explanations.
 
 Before requesting review for a code or extension change:
 
-1. Reproduce the original behavior with a minimal scenario.
+1. Reproduce the original behavior with a minimal scenario. For an extension,
+   this may be a one-file extension and one prompt; for agent behavior, use a
+   focused faux-provider test; for a TUI issue, use a deterministic fixture and
+   terminal size.
+
 2. State the package and public contract that own the fix.
 3. Add/run the narrowest regression test or controlled interactive proof.
 4. Run the repository-required static check for code changes.

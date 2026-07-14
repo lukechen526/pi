@@ -1,119 +1,286 @@
 # Glossary {#sec:glossary}
 
+Use this page as a lookup table, then follow the linked chapter for examples and
+source paths. Entries are ordered by concept family so related runtime, session,
+provider, and extension terms can be compared quickly.
+
+**Related:** [guide index](#sec:index) · [TypeScript basics](#sec:typescript) ·
+[architecture](#sec:architecture)
+
 **Agent**
 
-: The stateful class in `packages/agent` that owns a model, system prompt,
-  messages, active tools, queues, and one active run. A *run* is one continuous
-  loop cycle from a submitted prompt through assistant responses and tool calls
-  until **Steering** and **Follow-up** queues have nothing left to deliver and
-  the agent goes idle.
+: The stateful runtime in `packages/agent` that owns model context, messages,
+tools, queues, and one active run. See [Agent core](#sec:agent-core).
+
+**Agent core**
+
+: The provider-independent package layer that performs model turns, streams,
+tool batches, queues, and cancellation. See [Agent core](#sec:agent-core).
 
 **AgentSession**
 
-: The wrapper in `packages/coding-agent` around an **Agent**. It preprocesses
-  prompts, coordinates resources, configures tools and the system prompt,
-  bridges extension events, handles retries and **Compaction**, and records
-  events through its **SessionManager**. An **AgentSessionRuntime** owns the
-  live instance.
+: The `packages/coding-agent` wrapper around an **Agent**. It coordinates
+resources, prompts, tools, and extensions. It also manages retries, compaction,
+and persistence. See [Prompt lifecycle](#sec:prompt-lifecycle) and
+[Sessions](#sec:sessions).
 
 **AgentSessionRuntime**
 
-: The lifecycle owner of the current **AgentSession** and the cwd-bound service
-  bundle that backs it: settings, **Resource loader**, model registry, and
-  authentication. On new, resume, or fork it shuts down the old session and
-  services for the previous cwd, creates a matching bundle for the destination,
-  and rebinds hosts to the replacement; it does not mutate an existing session
-  into a new identity. See **SessionManager**.
+: The lifecycle owner of the current AgentSession and its cwd-bound services,
+including settings, resources, model registry, and authentication. See
+[Resources, settings, and trust](#sec:resources).
 
-**Assistant message event stream**
+**Faux provider**
 
-: Async stream from `packages/ai` that normalizes provider streaming events into
-  start, deltas, completion, and error states.
+: A deterministic simulated provider that returns scripted model responses
+without network calls. It is used as a **test double** so agent-behavior tests
+run offline and repeatably. See [Testing, debugging, and contribution](#sec:testing).
+
+**Host**
+
+: The program that drives Pi, such as the `pi` binary, an RPC client, or an SDK
+embedding. See [Modes, SDK, and operations](#sec:modes).
+
+**Mode**
+
+: The way a host communicates with Pi: interactive TUI, print, JSON, or RPC.
+See [Modes, SDK, and operations](#sec:modes).
+
+**AbortController / AbortSignal**
+
+: An `AbortController` owns cancellation; its `AbortSignal` is passed to work
+that should stop when the controller is aborted. See [TypeScript cancellation](#sec:typescript)
+and [Failure and recovery](#sec:failure).
+
+**Adapter**
+
+: Code that converts Pi's normalized request and response shapes into one
+provider's protocol format. See [Models, providers, and authentication](#sec:models).
+
+**Branch**
+
+: One path through a session tree, represented by linked entries from an
+ancestor to a selected point. See [Sessions and durable context](#sec:sessions).
+
+**Leaf**
+
+: The currently selected last entry in a session branch. See [Sessions and
+durable context](#sec:sessions).
+
+**Callback**
+
+: A function passed to another function to be called immediately or later. See
+[TypeScript functions and callbacks](#sec:typescript).
 
 **Compaction**
 
-: Summarizing older context into a durable session entry so recent context can
-  fit in a model window. It is not simple transcript deletion.
+: Summarizing older context into a durable session entry so recent context fits
+within a model window. It is not simple transcript deletion. See
+[Sessions](#sec:sessions) and [Failure and recovery](#sec:failure).
+
+**Compaction entry**
+
+: The durable session entry recording a compaction boundary and summary. It is
+different from the compaction operation that creates it. See [Sessions](#sec:sessions).
 
 **Context**
 
 : The provider-facing bundle of system prompt, converted messages, and active
-  tools. It is distinct from the broader persisted session held by a
-  **SessionManager**.
+tools. It is distinct from the broader persisted session. See [Prompt lifecycle](#sec:prompt-lifecycle).
+
+**Context window**
+
+: The model's maximum context budget, measured in tokens, for one request. Pi
+reserves part of that budget for the response and compacts older session context
+when the available space is too small. See [Sessions and durable context](#sec:sessions)
+and [Models, providers, and authentication](#sec:models).
 
 **Extension**
 
-: A runtime-loaded TypeScript/JavaScript factory module that receives
-  `ExtensionAPI` and registers behavior. Loaded by the **Resource loader** under
-  the resolved **Trust policy**.
+: A runtime-loaded TypeScript or JavaScript module that receives `ExtensionAPI`
+and registers hooks, tools, commands, or UI behavior. See [Extensions](#sec:extensions).
+
+**Extension command**
+
+: A slash command registered through the extension API, such as
+`pi.registerCommand("hello-pi", ...)`, which users invoke as `/hello-pi`. It is
+not a `!` user-shell command. See [Extensions](#sec:extensions) and [Built-in tools](#sec:tools).
 
 **Extension context**
 
-: The `ctx` passed to hooks, tools, and commands, containing mode, cwd, UI,
-  session access, and the model registry. Its optional `signal` is an
-  `AbortSignal` during active turn work so nested I/O can cancel with the agent;
-  it is usually `undefined` while idle.
+: The `ctx` passed to hooks, tools, and commands, containing mode, cwd (current
+working directory), UI, session access, and model services. See
+[Extensions](#sec:extensions).
+
+**cwd / current working directory**
+
+: The directory associated with the current Pi session. Relative paths for
+built-in tools and project resources are resolved against it. See [Built-in
+tools](#sec:tools) and [Resources, settings, and trust](#sec:resources).
 
 **Follow-up**
 
-: A queued user or custom message delivered only when the current run has no
-  more tool calls or **Steering** messages and would otherwise stop. Use it when
-  the current run should finish first; use **Steering** when new guidance should
-  affect the ongoing run at its next turn boundary.
+: A queued message delivered after the current run has no more tool calls or
+steering messages. See [Prompt lifecycle](#sec:prompt-lifecycle).
+
+**Renderer**
+
+: A function or component that converts tool output or message content into
+TUI display elements. See [Terminal UI](#sec:tui).
+
+**Settled**
+
+: The state when no automatic agent work remains, including retries, compaction,
+or queued continuations. See [Prompt lifecycle](#sec:prompt-lifecycle).
+
+**Stop reason / `stopReason`**
+
+: A field on the final assistant message that records why the agent stopped,
+such as normal completion, an output limit, an error, or an abort. See [Agent
+core](#sec:agent-core).
 
 **JSONL**
 
-: JSON Lines: a text format with one complete JSON value per line. Pi uses it
-  both for append-only session files and to frame JSON-mode and RPC streams.
+: JSON Lines: one complete JSON value per line. Pi uses it for append-only
+sessions and JSON/RPC streams. See [Sessions](#sec:sessions) and [Run modes](#sec:modes).
+
+**Model**
+
+: A named capability record describing a model's provider, features, limits,
+and cost. See [Models and authentication](#sec:models).
+
+**models.json**
+
+: The conventional global model-configuration file at
+`~/.pi/agent/models.json`. It can override provider settings and add or adjust
+model definitions; verify supported scope before assuming a project-local copy
+is loaded. See [Models, providers, and authentication](#sec:models).
 
 **Model registry**
 
-: Service in `packages/coding-agent` that knows models, providers,
-  authentication, OAuth, and dynamic provider registration.
+: The coding-agent service that resolves models, providers, authentication,
+OAuth, and dynamic provider registration. See [Models and authentication](#sec:models).
+
+**Provider**
+
+: A service or adapter that can answer model requests. A provider is different
+from a model, credential, or API adapter. See [Models and authentication](#sec:models).
+
+**Prompt template**
+
+: A reusable prompt snippet that can be expanded with context before a model
+request. See [Resources, settings, and trust](#sec:resources).
 
 **Resource loader**
 
-: Service in `packages/coding-agent` that discovers and loads extensions,
-  skills, prompt templates, themes, context files, and packages according to the
-  resolved **Trust policy** and each resource category's rules. Its results feed
-  **AgentSession** construction, including system-prompt inputs; the usual
-  implementation is reloaded with the rest of the cwd-bound bundle when an
-  **AgentSessionRuntime** replaces a session.
+: The coding-agent service that discovers extensions, skills, prompts, themes,
+context files, and packages according to trust and scope rules. See [Resources,
+settings, and trust](#sec:resources).
+
+**Schema**
+
+: A runtime description of the data a value is allowed to contain. A schema can
+validate external input; a TypeScript type or interface alone cannot inspect a
+runtime value. See [TypeScript basics](#sec:typescript) and [Built-in tools](#sec:tools).
+
+**TypeBox**
+
+: The library Pi uses to build runtime schemas and derive TypeScript static
+types, commonly with `Type.Object(...)` and `Static<typeof Schema>`. The schema
+still needs a runtime check to validate a value. See [TypeScript basics](#sec:typescript).
+
+**settings.json**
+
+: A JSON configuration file for Pi settings. Global settings conventionally
+live at `~/.pi/agent/settings.json`; project settings live at `.pi/settings.json`
+and are applied subject to project trust. See [Resources, settings, and trust](#sec:resources).
+
+**Retry**
+
+: A later attempt after a failure. Provider/SDK retries and agent-level retries
+are separate decisions. See [Models and authentication](#sec:models) and [Failure
+and recovery](#sec:failure).
+
+**Run**
+
+: One continuous agent loop from submitted prompt through assistant responses,
+tool calls, and queued continuation until the agent becomes idle. See [Agent core](#sec:agent-core).
+
+**Session**
+
+: Pi's durable record of a conversation: a header plus append-only entries that
+form a session tree. The selected branch determines the context reconstructed
+for the model. See [Sessions and durable context](#sec:sessions).
+
+**Session file / session format**
+
+: A `.jsonl` file containing one session header followed by JSON entries. Each
+entry has an ID and parent ID for tree reconstruction; the format also records
+model changes, compaction, extension state, and messages. See [Sessions and
+durable context](#sec:sessions).
 
 **SessionManager**
 
-: The persistence component used by an **AgentSession**. It stores the session
-  as an append-only **JSONL** tree, tracks the selected leaf and branches, and
-  reconstructs the active model **Context**. An **AgentSessionRuntime**
-  replaces it as part of replacing the current session.
+: The persistence component that stores a session as an append-only JSONL tree,
+tracks the selected leaf, and reconstructs active context. See [Sessions and
+durable context](#sec:sessions).
+
+**Skill**
+
+: Reusable task instructions loaded as model-facing resources. See [Resources,
+settings, and trust](#sec:resources).
 
 **Steering**
 
-: A queued message injected after the current assistant response and all tool
-  calls from that response finish, but before the next provider request. Use it
-  when new guidance should affect the ongoing run at its next turn boundary; use
-  a **Follow-up** when the current run should finish first.
+: A queued message injected after the current assistant response and tool work
+finish but before the next provider request. See [Prompt lifecycle](#sec:prompt-lifecycle).
+
+**System prompt**
+
+: The model-facing instruction context assembled from defaults, resources,
+settings, and extension changes. See [Resources](#sec:resources) and [Agent core](#sec:agent-core).
+
+**Theme**
+
+: A named set of semantic colors and UI styling values used by the TUI. See
+[Terminal UI](#sec:tui).
 
 **Tool**
 
-: A model-callable operation with a TypeBox parameter schema and async execute
-  function. Built-in and extension tools share the agent-loop boundary.
+: A model-callable operation with a parameter schema, description, execute
+function, and optional renderers. See [Built-in tools](#sec:tools) and [Extensions](#sec:extensions).
 
-**Tool result**
+**Tool call**
 
-: A durable message produced by a tool execution. Its content goes to the
-  model; details carry structured metadata for renderers/state.
+: One model request to invoke a named tool with arguments. It is distinct from
+the tool definition and from the resulting tool message. See [Built-in tools](#sec:tools).
 
-**Trust policy**
+**Tool result / `tool_result`**
 
-: The startup decision that determines whether project-local configuration and
-  resources may be loaded or executed, including settings, packages,
-  extensions, skills, prompts, and themes. The **Resource loader** applies that
-  decision when discovering project resources. Context files such as
-  `AGENTS.md` are a documented exception and load unless context loading is
-  disabled.
+: A runtime result produced by tool execution. A tool-result message is sent to
+the model; a `tool_execution_end` or related event announces lifecycle state to
+handlers and the UI. See [Agent core](#sec:agent-core) and [Extension event reference](#sec:events).
+
+**Turn**
+
+: One model request and the tool work that follows it. A run can contain many
+turns. See [Prompt lifecycle](#sec:prompt-lifecycle).
 
 **TUI**
 
-: Terminal user interface. Pi's reusable TUI primitives live in `packages/tui`;
-  `packages/coding-agent` composes them into the interactive application.
+: Terminal user interface. Generic primitives live in `packages/tui`; coding-agent
+composes them into the interactive application. See [Terminal UI](#sec:tui).
+
+**TTY / terminal**
+
+: A terminal device or terminal-emulator connection that carries interactive
+input and output. A TTY provides an interactive surface; print, JSON, and RPC
+hosts can run without one. See [Terminal UI](#sec:tui) and [Modes, SDK, and
+operations](#sec:modes).
+
+**Token**
+
+: A unit used to estimate model input and output size. Tokenization depends on
+the provider and model; Pi uses token counts for context limits, compaction, and
+cost metadata. See [Sessions and durable context](#sec:sessions) and [Models,
+providers, and authentication](#sec:models).

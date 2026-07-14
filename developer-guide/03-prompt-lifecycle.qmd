@@ -1,6 +1,11 @@
 # Prompt lifecycle: from Enter to agent settlement {#sec:prompt-lifecycle}
 
 This chapter traces the normal interactive path through the agent lifecycle.
+Before reading it, finish [TypeScript used by Pi](#sec:typescript) and
+[Architecture](#sec:architecture). The later [Agent core](#sec:agent-core)
+chapter explains the reusable loop in more detail; this chapter keeps the
+focus on the end-to-end path.
+
 It explains how event-driven transcript updates are requested, not terminal
 renderer layout or paint internals; for those, follow the `InteractiveMode`
 handlers into `packages/coding-agent/src/modes/interactive/components/` and
@@ -22,7 +27,9 @@ being explained.
 An **event** is a record saying that something happened. A **stream** is a
 sequence of partial results delivered over time. A **turn** is one model
 request and the tool work that follows it. A **settled** run is one with no
-retry, compaction, or queued continuation left to perform.
+retry, compaction, or queued continuation left to perform. A Pi message is
+composed of typed **content blocks** such as `text`, `thinking`, and `toolCall`,
+rather than one plain string.
 
 Use two prompts to keep the distinction concrete: `"What files changed?"`
 usually creates one model turn, while `"Read the config and fix the failing
@@ -54,10 +61,16 @@ resolved through `getUserInput()`. The `run()` loop awaits that method, then
 calls `await this.session.prompt(userInput)`.
 
 When Pi is already streaming, regular Enter calls `session.prompt(text,
-{ streamingBehavior: "steer" })`; Alt+Enter uses `"followUp"`. Neither starts a
-second concurrent agent run; the call queues a message for a defined loop
-boundary. During compaction, non-command input is held by interactive mode until
-the compaction flow completes.
+{ streamingBehavior: "steer" })`; Alt+Enter uses `"followUp"`. **Steering** waits
+for the current assistant response and its tool work to finish, then injects
+the message before the next provider request. A **follow-up** is held until
+there are no more tool calls or steering messages and the run would otherwise
+stop, then starts another turn. Neither starts a second concurrent agent run;
+each call queues a message at that exact loop boundary. **Compaction**
+summarizes older context into a durable entry so the model's context window is
+not exceeded; [Sessions and context](#sec:sessions) covers it in detail. During
+compaction, non-command input is held by interactive mode until the compaction
+flow completes.
 
 The initial prompt supplied by command-line arguments travels through the same
 `session.prompt()` API. Print and RPC modes do not instantiate
@@ -79,7 +92,8 @@ There are two distinct command systems:
 For ordinary text, `AgentSession.prompt()` asks the extension runner to emit
 an `input` event. The event sees raw text after extension-command lookup and
 before skill/template expansion. An extension can continue, transform, or
-handle it. If it continues, Pi expands `/skill:name ...` and prompt templates,
+handle it. If it continues, Pi expands `/skill:name ...`; skills are reusable
+model instructions and prompt templates are parameterized prompt snippets. Pi
 then continues with the expanded text.
 
 **Hook selection comes first:** built-in commands have already been handled by
@@ -99,12 +113,14 @@ different LLM representation.
 For a fresh run, `AgentSession.prompt()` validates the selected model and
 credentials, checks whether compaction is needed, and creates a user message.
 It then appends pending `nextTurn` messages: custom messages buffered by
-`sendCustomMessage(..., { deliverAs: "nextTurn" })` for inclusion with the
+`sendCustomMessage(..., { deliverAs: "nextTurn" })` (an ExtensionAPI method)
+for inclusion with the
 *next* fresh user prompt, rather than delivery to an active run. Next it emits
 `before_agent_start`, whose handlers can add custom messages and chain a
 system-prompt override, then calls `_runAgentPrompt(messages)`.
 
-`_runAgentPrompt()` calls `Agent.prompt()`. It can later call `Agent.continue()`
+`_runAgentPrompt()` calls `Agent.prompt()`; the reusable Agent API is detailed
+in [Agent core](#sec:agent-core). It can later call `Agent.continue()`
 for automatic retry, automatic compaction retry, or work queued by an
 `agent_end` handler. On settlement it clears the per-run prompt override,
 flushes pending user-bash messages, and emits `agent_settled`.
@@ -114,6 +130,19 @@ active tools, and queues. `Agent.prompt()` snapshots its state and starts
 `runAgentLoop()`.
 
 ## Stage 4: Context and system prompt cross three construction boundaries
+
+**In plain terms:** Pi builds a system prompt for the model, lets extensions
+adjust the message list, and then converts the result into the exact format the
+provider API expects.
+
+| Boundary | Owner in the runtime | What it produces |
+|---|---|---|
+| Base system-prompt assembly | `AgentSession._rebuildSystemPrompt()` and `buildSystemPrompt()` | System-prompt text from cwd, context files, skills, prompts, and active-tool guidance |
+| Extension context transform | `Agent`'s `transformContext` callback, wired to the extension `context` event | An adjusted `AgentMessage[]` list before provider conversion |
+| LLM/provider conversion | `convertToLlm()` followed by `streamFn`/`streamSimple()` | A provider-compatible `Context`, then the provider's assistant event stream |
+
+These are three transformations for an already-selected model, not three
+model-selection steps. The narrative below follows the same order.
 
 Model choice is not part of this stage. The initial model is chosen earlier,
 during `createAgentSession()` in `core/sdk.ts` (session restore, configured
@@ -205,9 +234,12 @@ implementation.
 ## Stage 6: Streaming response becomes agent events and TUI updates
 
 `streamAssistantResponse()` consumes the `AssistantMessageEventStream` with
-`for await`. It creates a partial assistant message on `start`, replaces that
-partial message as text/thinking/tool-call deltas arrive, and emits
-`message_start`, `message_update`, and `message_end` events.
+`for await`: this is the async-iteration boundary where provider deltas become
+agent events. The [Agent core](#sec:agent-core) chapter shows the same loop
+from the reusable runtime's point of view. It creates a partial assistant
+message on `start`, replaces that partial message as text/thinking/tool-call
+deltas arrive, and emits `message_start`, `message_update`, and `message_end`
+events.
 
 `Agent.processEvents()` reduces those events into state and then awaits all
 subscribers. `AgentSession` bridges generic events to persistence, extensions,
@@ -219,17 +251,11 @@ The extension lifecycle maps directly onto this path: `agent_start`,
 `turn_start`, `message_start`, many `message_update` events, `message_end`,
 then later `turn_end` and `agent_end`.
 
-### Compact event reference
-
-| Event family | Meaning here | Detail |
-|---|---|---|
-| `agent_start` / `agent_end` / `agent_settled` | Low-level run starts, ends, then has no automatic continuation left | Stage 10; extension timeline |
-| `turn_start` / `turn_end` | One assistant response and any resulting tool work | Stages 6–8 |
-| `message_start` / `message_update` / `message_end` | Transcript message begins, streams (assistant only), and finalizes | Stages 6 and 9 |
-| `tool_execution_start` / `tool_execution_update` / `tool_execution_end` | A tool row begins, receives partial output, and finalizes | Stage 7 |
-
-For event payloads and extension ordering guarantees, see the lifecycle
-reference in `packages/coding-agent/docs/extensions.md#lifecycle-overview`.
+For canonical detail, use [Agent core](#sec:agent-core) for loop state and
+queue semantics, [Built-in tools](#sec:tools) for tool contracts,
+[Extension event reference](#sec:events) for event payloads, and [Failure and
+recovery](#sec:failure) for recovery behavior. This chapter keeps only the
+end-to-end trace.
 
 ## Stage 7: Tool calls are parsed, validated, gated, and executed
 
@@ -239,22 +265,22 @@ assistant output, so any tool call may contain truncated JSON arguments even if
 its parsed block appears complete. The loop therefore fails every tool call in
 that message rather than risk side effects from incomplete arguments.
 
-For each normal tool call, the loop:
+For each normal tool call, the loop's short pipeline is:
 
-1. Emit `tool_execution_start`.
-2. Look up the active tool by name in the current context.
-3. Apply its optional `prepareArguments` compatibility transform.
-4. Validate arguments with `validateToolArguments()` against the TypeBox schema.
-5. Invoke `beforeToolCall`, which coding-agent wires to extension `tool_call`.
-   A handler may mutate validated input or return `{ block: true }`.
-6. Execute `tool.execute(id, args, signal, onUpdate)`.
-7. Convert incremental `onUpdate` values into `tool_execution_update` events.
-8. Invoke `afterToolCall`, wired to extension `tool_result`, and apply its
-   partial result patch.
-9. Emit `tool_execution_end` and append a `toolResult` message.
+1. Emit `tool_execution_start`, look up the active tool, and prepare and
+   validate its arguments against the TypeBox schema.
+2. Run the `beforeToolCall` gate (coding-agent's `tool_call` event), then call
+   `tool.execute(id, args, signal, onUpdate)`.
+3. Turn `onUpdate` values into update events, apply the `afterToolCall`
+   (`tool_result`) patch, emit `tool_execution_end`, and append a `toolResult`
+   message.
+
+See [Built-in tools](#sec:tools) for the contract and [Extension event
+reference](#sec:events) for payloads and hook ordering.
 
 Agent core defaults `toolExecution` to `"parallel"`
-(`options.toolExecution ?? "parallel"` in `packages/agent/src/agent.ts`).
+(`options.toolExecution ?? "parallel"` in `packages/agent/src/agent.ts`; see
+[Agent core](#sec:agent-core) for the ordering contract).
 Coding-agent's `new Agent({...})` in `core/sdk.ts` does not pass
 `toolExecution`, so that default remains. A caller of agent core can select
 sequential execution, and a tool declaring `executionMode: "sequential"` makes
@@ -266,8 +292,10 @@ before using sibling tool results as state.
 
 Built-in tools are supplied by coding-agent. They are ordinary tools at this
 boundary, which is why an extension can add a tool or override a built-in one.
-Custom filesystem-mutating tools must participate in `withFileMutationQueue()`
-to avoid lost writes when sibling tools run in parallel.
+Custom filesystem-mutating tools must participate in
+`withFileMutationQueue()` to avoid lost writes when sibling tools run in
+parallel; the [Built-in tools](#sec:tools) chapter has the runnable queue
+skeleton.
 
 ## Stage 8: Results create the next agent action
 
@@ -278,14 +306,16 @@ assistant response. If the model instead returns ordinary final text, the loop
 checks steering messages first and follow-up messages when it would otherwise
 stop.
 
-```text
-user/custom context -> model -> assistant tool calls
-                                |
-                                v
-                         validated tool results
-                                |
-                                +----> model again
-```
+The control flow is easier to read as four numbered decisions:
+
+1. Append each finalized `toolResult` to the in-memory context.
+2. If the batch has tool calls and is not explicitly terminating, send the
+   updated context to the model for another assistant response.
+3. If the assistant returns final text, drain steering first; when no tool calls
+   or steering remain, poll follow-up messages before stopping.
+4. If neither queue supplies work, emit `agent_end`; session-level retries,
+   compaction, and queued continuation may still occur above this low-level
+   boundary.
 
 A tool can return `terminate: true` to hint that the next model call should be
 skipped, but the batch terminates only when every finalized tool result sets
@@ -310,22 +340,21 @@ intentionally does not promise terminal rendering internals.
 
 ## Stage 10: Errors, cancellation, retries, compaction, and shutdown
 
-There are several deliberately different failure paths:
+The low-level loop deliberately separates provider failures from tool
+failures: a provider error or abort ends the run with an assistant message,
+whereas a schema error, blocked call, or thrown tool execution becomes an
+error `toolResult` that the model can recover from. Esc aborts the active
+`AbortController`; provider, tool, and extension work must honor the signal.
+For the complete recovery matrix, see [Failure and recovery](#sec:failure).
 
-| Situation | What happens |
-|---|---|
-| Provider/model run throws | `Agent.runWithLifecycle()` turns it into a final assistant message with `stopReason: "error"` or `"aborted"`, then emits normal terminal events. |
-| Provider stream reports error/aborted | `agent-loop.ts` ends the turn without executing tools. |
-| Tool schema invalid, unknown tool, hook blocks, or execute throws | The loop creates an error tool result and gives that result to the model. |
-| User presses Esc / abort is requested | The active `AbortController` is aborted; abort-aware provider/tool/extension work should receive the signal. |
-| Retryable assistant error | `AgentSession` may prepare an automatic retry after the low-level run ends. |
-| Context pressure | `AgentSession` may compact, write a summary entry, rebuild context, and continue/retry. |
-| Session replacement or process exit | The extension runtime receives `session_shutdown`; session-bound resources must be cleaned up. |
-
-`agent_end` means the current low-level loop stopped. `agent_settled` is later:
-it means Pi has no automatic retry, compaction retry, or queued continuation
-left. Status integrations and cleanup that require true idleness should use
-`agent_settled` or `ctx.waitForIdle()` in a command context.
+Above this boundary, `AgentSession` may retry, compact older context, rebuild
+it, and continue; [Sessions and context](#sec:sessions) explains compaction.
+Session replacement or process exit emits `session_shutdown`, where
+session-bound resources should be cleaned up. `agent_end` means the current
+low-level loop stopped. `agent_settled` is later: Pi has no automatic retry,
+compaction retry, or queued continuation left. Status integrations and cleanup
+that require true idleness should use `agent_settled` or `ctx.waitForIdle()` in
+a command context.
 
 ## Trace this yourself
 

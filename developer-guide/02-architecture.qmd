@@ -1,10 +1,16 @@
 # Architecture: packages, ownership, and entry points {#sec:architecture}
 
-Pi deliberately separates generic agent machinery from the coding-agent
-application. A useful rule is: move a feature down only when it is genuinely
-useful outside the coding agent. The coding-agent package owns command-line
-behavior, local filesystem tools, project resources, session UX, and the
-extension API; the `agent` package should not learn those policies.
+Pi separates generic agent machinery from the coding-agent application. If
+this is your first pass through the repository, start with [the short
+TypeScript route](#sec:typescript); JavaScript-only readers can use its optional
+[foundations workbook](17-typescript-foundations-workbook.qmd). The terms
+package, dependency, entry point, and boundary are also available in the
+[glossary](#sec:glossary).
+
+A useful rule is: move a feature down only when it is genuinely useful outside
+the coding agent. The coding-agent package owns command-line behavior, local
+filesystem tools, project resources, session UX, and the extension API; the
+`agent` package should not learn those policies.
 
 ## What you will learn first
 
@@ -15,11 +21,14 @@ point** is the file where a feature or application begins. A **boundary** is a
 place where one representation becomes another, such as a provider message
 becoming an agent event.
 
-For a small example, the terminal-facing `coding-agent` package depends on the
-generic `agent` package, while `agent` depends on the provider-neutral `ai`
-package. The direction tells you where a fix belongs: a terminal component
-does not belong in `packages/agent`, and provider JSON does not belong in the
-TUI.
+For a beginner-readable boundary example, follow a `/hello-pi` command. The
+command is registered by an extension in `coding-agent`, its handler may call
+coding-agent session/UI APIs, and the resulting model request still crosses the
+agent loop into provider-neutral `ai`. If the change is only terminal layout,
+start in `tui`; if it changes provider JSON, start in `ai`; if it changes the
+generic tool loop, start in `agent`. The direction tells you where a fix
+belongs: a terminal component does not belong in `packages/agent`, and provider
+JSON does not belong in the TUI.
 
 ## Dependency direction
 
@@ -42,7 +51,8 @@ monorepo, allowing it to be reused by other terminal applications.
 ## Repository-level conventions
 
 The root `package.json` defines npm workspaces for `packages/*` and selected
-extension examples. All packages are ESM. The root `tsconfig.json` maps public
+extension examples. All packages are ESM (ECMAScript modules: files use
+`import`/`export` rather than CommonJS `require`). The root `tsconfig.json` maps public
 package names back to source files for whole-repository checking. Each package
 has its own `package.json` with public exports and build script. Release
 versioning is lockstep: all packages share one version and release together.
@@ -53,18 +63,21 @@ package. This preserves the boundary that published consumers see.
 
 The normal quality gate after code changes is `npm run check`. Per repository
 rules, do not run `npm run build` or the full test suite merely as a habit;
-use the requested or relevant targeted validation. To validate a change
-confined to `developer-guide/`, run `quarto render developer-guide` from the
-repository root; `npm run check` does not render this book.
+use the requested or relevant targeted validation. Guide verification is
+different because QMD links, code wrapping, tables, and PDF navigation are
+rendered artifacts rather than TypeScript compilation: for a documentation-only
+change, run `quarto render developer-guide` from the repository root;
+`npm run check` does not render this book.
 
 ## Component walkthrough
 
 ### `packages/tui`: terminal rendering primitives
 
-`packages/tui/src/index.ts` is the public barrel. It exports the `TUI` class,
+`packages/tui/src/index.ts` is the public barrel (a file that re-exports
+symbols from other modules). It exports the `TUI` class,
 the `Component` interface, containers, text/editor/list components, terminal
-abstractions, key parsing, keybindings, autocomplete, and ANSI-aware text
-utilities.
+abstractions, key parsing, keybindings, autocomplete, and ANSI-aware (terminal
+escape-code-aware) text utilities.
 
 `packages/tui/src/tui.ts` owns the component tree, focus, layout, overlays,
 input routing, and differential rendering. `src/terminal.ts` provides the
@@ -141,7 +154,9 @@ starts `InteractiveMode`, RPC mode, or print mode. It is composition and
 application policy, not the agent loop.
 
 The major coding-agent subsystems are listed below. Every path in the
-**Important files** column is relative to `packages/coding-agent/src/`.
+**Important files** column is relative to `packages/coding-agent/src/`; for
+example, `core/sdk.ts` means
+`packages/coding-agent/src/core/sdk.ts`.
 
 | Subsystem | Responsibility | Important files |
 |---|---|---|
@@ -156,7 +171,9 @@ The major coding-agent subsystems are listed below. Every path in the
 | Interactive app | Chat transcript, editor, dialogs, commands, renderer adapters | `modes/interactive/interactive-mode.ts`, `modes/interactive/components/` |
 | Extensions | Types, discovery/loading, event dispatch, context wrappers | `core/extensions/types.ts`, `core/extensions/loader.ts`, `core/extensions/runner.ts`, `core/extensions/wrapper.ts` |
 
-The table is an orientation map, not an exhaustive API list. To navigate it,
+The table is an orientation map, not an exhaustive API list. On a first read,
+look at the first column and the row matching your task; skip the file paths
+until you need them. To navigate it,
 start with the subsystem matching the behavior you are changing, then follow
 its named entry file before reading neighboring implementation files. Public
 coding-agent exports come from `src/index.ts`; extension authors should import
@@ -196,7 +213,8 @@ such as session resume or fork.
 
 ## Persistence and context are different things
 
-Pi sessions are JSONL files managed by `SessionManager`. They are tree-shaped:
+Pi sessions are JSONL (JSON Lines: one complete JSON object per line) files
+managed by `SessionManager`. They are tree-shaped:
 entries have `id` and `parentId`, so a branch can exist in one file. The current
 branch is converted into LLM context by `buildContextEntries()` and related
 helpers in `core/session-manager.ts`.
@@ -221,13 +239,18 @@ user-facing policy and session entries.
 
 Use the narrowest layer that truthfully owns the behavior:
 
-| Desired change | First place to investigate |
-|---|---|
-| Add a provider/API serializer | `packages/ai/src/api/` and `src/providers/` |
-| Change generic tool scheduling or streaming semantics | `packages/agent/src/agent-loop.ts` |
-| Add keyboard/editor/component capability reusable by TUIs | `packages/tui/src/` |
-| Change Pi commands, session behavior, built-in tool policy, settings | `packages/coding-agent/src/` |
-| Add user/team behavior without forking Pi | Extension, skill, theme, prompt, settings, or package |
+| Desired change | Discriminator | First place to investigate |
+|---|---|---|
+| Add a provider/API serializer | Provider protocol or request conversion | `packages/ai/src/api/` and `src/providers/` |
+| Change generic tool scheduling or streaming semantics | Same loop rule for every consumer | `packages/agent/src/agent-loop.ts` |
+| Add keyboard/editor/component capability reusable by TUIs | Terminal primitive, not Pi policy | `packages/tui/src/` |
+| Change Pi commands, session behavior, built-in tool policy | Application behavior or configuration | `packages/coding-agent/src/` |
+| Set values without adding executable behavior | **Configuration** in `settings.json` | Settings and resource-loading code |
+| Add a command, tool, hook, state, or request behavior | **Extension** loaded at runtime | Public `ExtensionAPI` and `04-extensions.qmd` |
+| Give the model reusable procedural guidance | **Skill** loaded as contextual instructions | Resource loader and `skills/` |
+| Change colors and visual style | **Theme** consumed by renderers | Theme resources and TUI renderers |
+| Reuse a written user/model request | **Prompt** template or slash command | Prompt resources and command registration |
+| Share a tested set of resources or behavior | **Package** with its own manifest/version | Package/resource distribution code |
 
 Continue to [Prompt lifecycle](#sec:prompt-lifecycle) for a source-level trace
 of how these package boundaries cooperate from interactive input through model

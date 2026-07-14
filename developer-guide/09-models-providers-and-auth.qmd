@@ -15,10 +15,13 @@ API adapter       -> how normalized Pi context becomes provider protocol
 ```
 
 The separation lets the coding agent present one model selector and one agent
-loop while supporting OpenAI-compatible servers, Anthropic, Google, Bedrock,
-OAuth, proxies, and extension-defined providers. Streaming is the adapter's
-delivery path for that protocol, not a separate product surface: adapters emit
-a normalized event stream that the agent consumes.
+loop while supporting OpenAI-compatible servers, Anthropic, Google, and AWS
+Bedrock (AWS's managed model service), plus OAuth (browser- or device-based
+authentication), proxies, and extension-defined providers. Read [Resources,
+settings, and trust](#sec:resources) before changing credentials or
+project-local config. Streaming is the adapter's delivery path for that
+protocol, not a separate product surface: adapters emit a normalized event
+stream that the agent consumes.
 
 Key source files are `packages/ai/src/types.ts`, `packages/ai/src/compat.ts`,
 `packages/ai/src/models.ts`, `packages/coding-agent/src/core/model-registry.ts`,
@@ -29,7 +32,7 @@ and `packages/coding-agent/src/core/auth-storage.ts`.
 A **model** is the named capability record Pi selects. A **provider** is the
 service or adapter that can answer requests. A **credential** proves access to
 that provider. An **API adapter** translates Pi's normalized request into one
-provider's wire format. In a local setup, `local-model` is a model ID,
+provider's protocol format. In a local setup, `local-model` is a model ID,
 `local` is a provider name, an environment variable is a credential source,
 and `openai-completions` is an adapter choice. These are four different values,
 not four names for the same thing.
@@ -66,13 +69,13 @@ extension provider registrations.
 built-in provider catalogs
   -> models.json provider overrides
   -> models.json per-model overrides
-  -> custom models merged/upserted
+  -> custom models added or replaced
   -> OAuth model adjustment
   -> extension registerProvider configuration
   -> current ModelRegistry.models
 ```
 
-Failure isolation is deliberate. If `models.json` cannot be read, parsed, or
+> **Failure isolation:** If `models.json` cannot be read, parsed, or
 validated, the registry records the error for the interactive application but
 still loads the generated built-in catalog. The failed load contributes no
 custom models or catalog overrides. A typo in a local override can therefore
@@ -102,8 +105,9 @@ attempts to continue the model choice that created historical context.
 
 Pi's model-facing thinking levels are `off`, `minimal`, `low`, `medium`,
 `high`, `xhigh`, and `max`. Providers use different APIs and vocabulary. A
-model's `thinkingLevelMap` is a tristate map from those Pi levels to
-provider-specific values:
+model's `thinkingLevelMap` is a three-way map from those Pi levels to
+provider-specific values: each level can be omitted (use the adapter default),
+a string (send a provider-specific value), or `null` (unsupported):
 
 | Value | Support | Selector / clamp | Wire value |
 | --- | --- | --- | --- |
@@ -135,8 +139,10 @@ supported set before any provider-specific serialization runs.
 
 ## Custom models in `models.json`
 
-The conventional file is `~/.pi/agent/models.json`. A minimal local
-OpenAI-compatible provider looks like this:
+The conventional file is `~/.pi/agent/models.json`. This chapter's source
+configuration is global; verify current project-local support before assuming
+that `.pi/models.json` is also loaded. A minimal local OpenAI-compatible provider
+looks like this:
 
 ```json
 {
@@ -181,7 +187,9 @@ sets, not progressive billing.
 }
 ```
 
-`calculateCost()` in `packages/ai/src/models.ts` picks rates as follows:
+A tier is not a progressive billing bracket: the entire request uses one
+complete rate set chosen by its highest matching threshold. `calculateCost()` in
+`packages/ai/src/models.ts` picks rates as follows:
 
 1. Start from the base `cost` rates.
 2. Sum input-side usage as `input + cacheRead + cacheWrite`.
@@ -253,6 +261,7 @@ must reuse a previous token for a few minutes, wrap it:
 set -euo pipefail
 cache="${XDG_CACHE_HOME:-$HOME/.cache}/pi/team-provider-token"
 max_age_seconds=300
+# macOS uses `stat -f %m`; GNU/Linux uses `stat -c %Y` for this timestamp.
 if [[ -f "$cache" ]] && [[ $(($(date +%s) - $(stat -f %m "$cache"))) -lt $max_age_seconds ]]; then
   cat "$cache"
   exit 0
@@ -291,12 +300,26 @@ error if no key resolved.
 
 ### OAuth lifecycle
 
-Running `/login <provider>` invokes the registered provider's `login()` flow
-with callbacks that present an authorization URL or device code, collect
+OAuth lets Pi authenticate with providers that use browser-based or device-code
+login flows instead of static API keys. Running `/login <provider>` invokes the
+registered provider's `login()` flow.
+An extension provider must supply the following shape (the methods are required
+for the corresponding OAuth integration; this is not a complete login flow):
+
+```ts
+const oauthProvider = {
+  async login() { /* return stored credential details */ },
+  async refreshToken(credentials: unknown) { return credentials; },
+  async getApiKey(credentials: unknown) { return String(credentials); },
+};
+```
+
+The full `login()` flow uses callbacks that present an authorization URL or
+device code, collect
 prompts and selections, and report progress. Pi stores the returned
 access/refresh data and expiry in `auth.json`.
 For a request, `getApiKey()` calls the provider's `getApiKey()` to derive the
-wire credential. After expiry, one process refreshes through `refreshToken()`
+credential sent in the provider's protocol format. After expiry, one process refreshes through `refreshToken()`
 under the file lock and persists the replacement credentials; other Pi
 processes then reread the result. An OAuth provider may also implement
 `modifyModels()` to derive account-specific endpoints or model metadata from
@@ -324,10 +347,18 @@ IDs.
 
 ## The unified streaming API
 
-`packages/ai/src/types.ts` defines a provider-independent `Context` and an
-`AssistantMessageEventStream`. `StreamOptions` carries abort signal, key,
-transport preference, cache retention, session ID, headers, timeout, retry,
-payload/response hooks, metadata, and provider-scoped environment.
+`packages/ai/src/types.ts` defines a normalized, provider-independent `Context`:
+it contains an optional system prompt, the normalized message list, and
+optional normalized tool definitions. Adapters convert this `Context` into
+their own wire format; it is not a raw provider payload. The same module
+defines `AssistantMessageEventStream`. `StreamOptions` carries abort signal,
+key, transport preference, cache retention, session ID, headers, timeout,
+retry, payload/response hooks, metadata, and provider-scoped environment.
+An `AssistantMessage.stopReason` is one of `"stop"`, `"length"`,
+`"toolUse"`, `"error"`, or `"aborted"`. A normal `done` stream event carries
+`stop`, `length`, or `toolUse`; an `error` stream event carries `error` or
+`aborted`. Keep these normalized values distinct from a provider's raw finish
+reason.
 
 `streamSimple(model, context, options)` in `src/compat.ts` is a dispatch point:
 
@@ -344,7 +375,12 @@ agent loop therefore does not need a branch for every vendor protocol.
 
 ## Payload and response hooks
 
-`StreamOptions` has `onPayload` and `onResponse`. Coding-agent connects these
+`StreamOptions` has `onPayload` and `onResponse`. The payload hook observes the
+serialized request before sending; the response hook observes status and headers
+after the server replies. Use them for narrowly scoped, sanitized
+diagnostics such as a correlation ID (for example, an `X-Request-Id` header);
+do not log credentials, full system prompts, or raw user context. Coding-agent
+connects these
 to extension events. `before_provider_request` sees the provider-specific
 payload after an adapter serializes Pi context. `after_provider_response` sees
 status/headers after HTTP response receipt and before body consumption when the
@@ -363,10 +399,13 @@ WebSocket connection timeout, provider SDK retry count, and max retry delay are
 separate settings because they govern different failures.
 
 The coding-agent stream function applies settings and calls `streamSimple` with
-an effective timeout. It treats a configured zero HTTP idle timeout as an
-effectively disabled finite timeout for SDKs that interpret zero as immediate
-expiry. Agent-level retry happens later in `AgentSession`, after it receives a
-final failed assistant message, and is separate from SDK/provider retries.
+an effective timeout. A configured zero HTTP idle timeout is translated to
+`2147483647` milliseconds in `packages/coding-agent/src/core/sdk.ts`, because
+the provider SDKs interpret zero as immediate expiry; this is an effective
+large finite value, not a promise of an unbounded request. An explicit
+`options.timeoutMs` or provider retry timeout can take precedence. Agent-level
+retry happens later in `AgentSession`, after it receives a final failed
+assistant message, and is separate from SDK/provider retries.
 
 ## Custom providers from an extension
 

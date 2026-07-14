@@ -1,21 +1,48 @@
 # Welcome to the Pi codebase {#sec:index}
 
 This guide is for developers who are new to Pi's TypeScript codebase; you only
-need to be comfortable reading code. Its job is practical: by the end, you
-should be able to trace a prompt through Pi, find the right layer for a change,
-and build an extension without guessing at the API.
+need to be comfortable reading code. By the end, you should be able to trace a
+prompt through Pi, find the right layer for a change, and build an extension
+without guessing at the API.
 
-The book is deliberately staged. First learn enough TypeScript to read the
-examples, then learn the runtime path, then study the concrete tools and state
-that make Pi useful. Only after that do the extension, UI, integration, and
-reference chapters introduce the less common edges of the system. Each chapter
-opens with its vocabulary and a small mental model before it uses the source.
+The index is the authoritative orientation hub. The numeric filenames are stable
+identifiers, not a required reading order; the rendered parts and routes below
+are the sequence to follow.
 
-This is a guide to the repository as checked out, not a replacement for the
-published user documentation. File paths throughout are repository-relative.
-They are deliberately specific so that you can open the implementation beside
-this book. When a section simplifies a control flow, it says so; the named
-source files are the authority for edge cases.
+## Choose a route
+
+You do not need to read every chapter. Choose the outcome that matches your
+work:
+
+| Intent | Route |
+|---|---|
+| **Build a first extension** | [Setup](#quick-start) → [the runnable extension in chapter 04](04-extensions.qmd#a-complete-first-extension) → [production extension patterns in chapter 05](#sec:customization) |
+| **Contribute to core** | [quick Pi TypeScript](#sec:typescript) → [architecture](#sec:architecture) → [prompt lifecycle](#sec:prompt-lifecycle) → [agent core](#sec:agent-core) → [built-in tools](#sec:tools) → [testing and contribution](#sec:testing) |
+| **Embed or automate Pi** | [architecture](#sec:architecture) → [models and authentication](#sec:models) → [modes and SDK](#sec:modes) → [failure and recovery](#sec:failure) |
+| **Learn TypeScript first** | [optional foundations workbook](17-typescript-foundations-workbook.qmd#sec:typescript-workbook) → [quick Pi TypeScript](#sec:typescript) → [architecture](#sec:architecture) |
+
+The first route is for extension authors; the second follows ownership into the
+core runtime; the third emphasizes host boundaries; and the fourth is a
+complete beginner route that returns to the shorter Pi chapter after the
+foundations.
+
+::: {.callout-tip title="First success in 10–15 minutes"}
+Use the canonical [complete first extension](04-extensions.qmd#a-complete-first-extension)
+rather than copying a second example into this index.
+
+1. Create the discovered location and save the linked `hello-pi.ts` listing:
+   `mkdir -p ~/.pi/agent/extensions`.
+2. From a terminal with Pi available, run
+   `pi -e ~/.pi/agent/extensions/hello-pi.ts`.
+3. **Visible success:** Pi shows `hello-pi extension is ready`; run
+   `/hello-pi Ada` and see the greeting notification.
+4. Edit the file, run `/reload`, and confirm the startup notification appears
+   again. Reload tears down and creates the extension runtime.
+5. **Cleanup:** remove `~/.pi/agent/extensions/hello-pi.ts` when finished.
+
+Extensions run with the permissions of the Pi process. Read the file before
+running it, and do not install untrusted extension packages.
+:::
 
 ## Prerequisites and development setup
 
@@ -23,42 +50,55 @@ Before diving into the codebase, make sure your environment is ready.
 
 | Requirement | Minimum version | Why |
 |---|---|---|
-| Node.js | >= 22.19.0 | Pi runs erasable TypeScript directly with Node's native type stripping and uses modern ESM features. Native stripping does not type-check or transform TypeScript syntax that needs JavaScript emit; `tsx` remains a development runner and `jiti` loads extensions. See the `engines` field in `package.json`. |
+| Node.js | >= 22.19.0 | Pi runs erasable TypeScript directly with Node's native type stripping and uses modern ESM features. |
 | npm | Bundled with Node.js | Workspace management and package installs. The repo uses `npm workspaces`. |
 | git | Any recent version | To clone and navigate repository history. |
-| TypeScript knowledge | Reading level | This guide teaches what you need in [chapter 1](#sec:typescript). You do not need to be fluent. |
+| TypeScript knowledge | Reading level | The quick chapter teaches the Pi patterns; the workbook supplies beginner foundations. |
 
-### Quick start
+::: {.callout-note title="Erasable TypeScript and the repository checks"}
+**Erasable TypeScript** is type syntax that can be removed without changing the
+resulting JavaScript. Native Node stripping does not type-check the file or
+transform syntax that needs JavaScript emit, so Pi avoids constructor parameter
+properties, `enum`, and `namespace` in checked source. Use explicit fields and
+literal unions instead.
+
+Runtime and checking are separate. `tsx` is a development runner, `jiti` loads
+extensions, and `tsgo` is the TypeScript-native checker/build tool. Use
+`npx tsgo --noEmit` for a focused no-emit check; it does not run the program.
+For repository code changes, `npm run check` is the broader quality gate.
+:::
+
+### Quick start {#quick-start}
 
 ```bash
 git clone https://github.com/earendil-works/pi.git
 cd pi
-npm install --ignore-scripts  # Install dependencies without running lifecycle scripts
-npm run build                 # Build all packages
-npm run check                 # Lint, format, and type check
-./pi-test.sh                  # Run pi from source (works from any directory)
+npm install --ignore-scripts  # Install dependencies without lifecycle scripts
+npm run check                 # Check the repository
+./pi-test.sh                  # Run Pi from this checkout
 ```
 
-`npm install --ignore-scripts` is intentional: the project pins exact dependency
-versions and does not run install lifecycle scripts by default. Use `npm ci --ignore-scripts`
-for a clean CI-style install only when `package-lock.json` is present and matches
-`package.json`; it removes the existing installation and installs the lockfile
-exactly. The final command, `./pi-test.sh`, launches the repository's Pi
-implementation directly from source rather than a globally installed or
-published build.
+Invoke `./pi-test.sh` by that path from the Pi checkout: `cd` into the cloned
+repository first. It is not a globally installed command. From another
+working directory, use the checkout's absolute path, for example
+`/path/to/pi/pi-test.sh`.
 
-If you only want to write extensions (not modify Pi itself), you do not need to
-clone this repository. Install pi globally and start writing `.ts` files under
-`~/.pi/agent/extensions/`. The extension chapter walks through each step after
-the guide has introduced the agent loop and tool contract.
+`npm install --ignore-scripts` avoids install lifecycle scripts. Use
+`npm ci --ignore-scripts` only for a clean CI-style install when the lockfile
+matches `package.json`. The test launcher runs the repository's Pi
+implementation directly rather than a globally installed or published build.
+
+If you only want to write extensions, you do not need to clone this repository.
+Install Pi globally and start writing `.ts` files under
+`~/.pi/agent/extensions/`; chapter 04 walks through discovery and reload.
 
 ### Editor setup
 
 Any editor with TypeScript support works. VS Code users get inline type hints,
-autocomplete for `ExtensionAPI` methods, and schema validation on tool parameters
-out of the box when TypeScript resolves the `@earendil-works/*` package types. If
+autocomplete for `ExtensionAPI` methods, and schema validation on tool
+parameters when TypeScript resolves the `@earendil-works/*` package types. If
 you are writing extensions outside the monorepo, install the published packages
-as dev dependencies to get editor support:
+as dev dependencies:
 
 ```bash
 npm install --save-dev @earendil-works/pi-ai @earendil-works/pi-coding-agent
@@ -66,10 +106,9 @@ npm install --save-dev @earendil-works/pi-ai @earendil-works/pi-coding-agent
 
 ### TypeScript configuration for extension authors
 
-Extensions are loaded by Pi at runtime with `jiti`, so you do not need a
-tsconfig.json or build step for a single-file extension. If you write a
-multi-file extension or a Pi package, create a minimal tsconfig.json that
-resolves the Pi package types:
+Extensions are loaded by Pi at runtime with `jiti`, so a single-file extension
+does not need a `tsconfig.json` or build step. A multi-file extension or Pi
+package should use a minimal configuration that resolves the Pi package types:
 
 ```json
 {
@@ -83,57 +122,52 @@ resolves the Pi package types:
 }
 ```
 
-Type-check your extension with `npx tsc --noEmit`.
+Type-check an extension with `npx tsc --noEmit`. Loading through `jiti` and
+checking through TypeScript are separate checks.
 
 ## What Pi is
 
-Pi is a TypeScript monorepo for an agent harness and a self-extensible coding
-agent. The repository is an npm workspaces project: its root `package.json`
-declares the workspaces. The interactive `pi` command is implemented by
-`@earendil-works/pi-coding-agent`; it composes a terminal UI, an agent runtime,
-and a provider-neutral AI API.
+Pi is a TypeScript monorepo for an **agent harness** (the runtime that
+coordinates model requests, tools, and application state) and a self-extensible
+coding agent. The root `package.json` declares npm workspaces. The interactive
+`pi` command is implemented by `@earendil-works/pi-coding-agent`; it composes a
+terminal UI, an agent runtime, and a provider-neutral AI API.
 
 ### How the npm workspace works
 
-The root `package.json` declares five package workspaces through `"packages/*"`:
+The root `package.json` declares five package workspaces through `packages/*`:
 `packages/tui`, `packages/ai`, `packages/agent`, `packages/coding-agent`, and
-`packages/orchestrator`. It also declares five explicit extension-example
-workspaces: `with-deps`, `custom-provider-anthropic`, `custom-provider-gitlab-duo`,
-`sandbox`, and `gondolin` under `packages/coding-agent/examples/extensions/`.
-Thus, `packages/*` is not the complete workspace list.
+`packages/orchestrator`. It also declares extension-example workspaces under
+`packages/coding-agent/examples/extensions/`, so `packages/*` is not the whole
+workspace list.
 
-`npm install` at the repository root installs dependencies for every declared
-workspace and links local workspace packages for package-name imports such as
-`@earendil-works/pi-ai`. Those imports use each workspace's package metadata
-(the published entries point at `dist`); the root `tsconfig.json` separately maps
-package names to source entry points for whole-project type checking without
-compiling.
+An npm **workspace** is a package managed from a shared repository root.
+`npm install` links local workspace packages for imports such as
+`@earendil-works/pi-ai`. The root `tsconfig.json` separately maps package names
+to source entry points for whole-project type checking.
 
-When you write an extension outside the monorepo, you import from the published
-npm packages (`@earendil-works/pi-coding-agent`, etc.). Pi bundles these at
-runtime, so you specify them as `peerDependencies` (not `dependencies`) to avoid
-bundling a duplicate copy.
+When writing an extension outside the monorepo, import published npm packages
+and declare them as peer dependencies when Pi bundles them at runtime.
 
 ### Import rules at a glance
 
 | Context | Import style | Example |
 |---|---|---|
 | Inside a package, same package | Relative with `.ts` | `import { Agent } from "./agent.ts"` |
-| Inside the repo, cross-package | Package name (no `.ts`) | `import { Type } from "@earendil-works/pi-ai"` |
+| Inside the repo, cross-package | Package name | `import { Type } from "@earendil-works/pi-ai"` |
 | Extension outside the repo | Published package name | `import { defineTool } from "@earendil-works/pi-coding-agent"` |
 
-The four packages on the normal interactive prompt path are:
+The normal interactive prompt path crosses these packages:
 
-| Package | Role | Start reading at |
-|---|---|---|
-| `packages/tui` | Reusable terminal UI primitives and differential rendering | `src/index.ts`, `src/tui.ts` |
-| `packages/ai` | Models, provider dispatch, streaming API adapters, authentication primitives | `src/index.ts`, `src/types.ts`, `src/compat.ts` |
-| `packages/agent` | Provider-independent agent loop, message state, tool execution | `src/agent.ts`, `src/agent-loop.ts`, `src/types.ts` |
-| `packages/coding-agent` | CLI, interactive application, sessions, built-in tools, configuration, extensions | `src/main.ts`, `src/core/sdk.ts`, `src/core/agent-session.ts` |
+| Source package | Published package | Role | Start reading at |
+|---|---|---|---|
+| `packages/tui` | `@earendil-works/pi-tui` | Reusable terminal UI primitives and differential rendering | `src/index.ts`, `src/tui.ts` |
+| `packages/ai` | `@earendil-works/pi-ai` | Models, provider dispatch, streaming API adapters, authentication | `src/index.ts`, `src/types.ts` |
+| `packages/agent` | `@earendil-works/pi-agent-core` | Provider-independent agent loop, message state, tool execution | `src/agent.ts`, `src/agent-loop.ts`, `src/types.ts` |
+| `packages/coding-agent` | `@earendil-works/pi-coding-agent` | CLI, interactive application, sessions, built-in tools, configuration, extensions | `src/main.ts`, `src/core/sdk.ts`, `src/core/agent-session.ts` |
 
-`packages/orchestrator` is an experimental package depending on the coding
-agent. It is useful when you specifically need its process orchestration
-surface, but it is not on the normal interactive prompt path described here.
+`packages/orchestrator` is experimental. It depends on coding-agent and is a
+separate process-orchestration surface, not a hidden step of normal prompting.
 
 ## A mental model in one diagram
 
@@ -158,48 +192,58 @@ provider API (OpenAI, Anthropic, Google, ...)
 ```
 
 The vertical arrows show the usual prompt path. Extensions are loaded by the
-coding agent and hook into defined AgentSession and agent-loop boundaries—for
+coding agent and hook into defined `AgentSession` and agent-loop boundaries—for
 example to inspect input, observe session events, add or wrap tools, customize
 UI, or alter requests. These hooks participate in the normal runtime; they do
 not bypass the agent loop.
 
 ## Reading order and outcomes
 
-Read the first six content chapters in order, after this welcome chapter. They
-form the beginner path from "I can read this file" to "I can make a small, safe
-extension":
+The rendered book makes its roles visible with parts. The route below is the
+same order recorded in `developer-guide/README.md` for filesystem browsers.
 
-1. [TypeScript used by Pi](#sec:typescript) teaches the language patterns that
-   appear in the rest of the book.
+### Start here
+
+1. [TypeScript used by Pi](#sec:typescript) is the short route; the optional
+   [foundations workbook](17-typescript-foundations-workbook.qmd#sec:typescript-workbook)
+   is at the end as an appendix.
 2. [Architecture: packages, ownership, and entry points](#sec:architecture)
    gives each package one clear job.
-3. [Prompt lifecycle: from Enter to the next render](#sec:prompt-lifecycle)
-   shows the whole journey without requiring source-level detail yet.
-4. [Agent core: runs, events, queues, and tool batches](#sec:agent-core)
-   explains the reusable loop at the center of that journey.
-5. [Built-in tools: filesystem and shell execution](#sec:tools) turns the loop
-   into concrete, inspectable operations.
-6. [Extensions: change Pi without forking it](#sec:extensions) uses those
-   concepts to build a first customization.
 
-The next six content chapters explain the surrounding systems in the order a real feature
-usually encounters them: [sessions and durable context](#sec:sessions),
-[resources, settings, and trust](#sec:resources), [models and authentication](#sec:models),
-[the terminal UI](#sec:tui), [customization decisions](#sec:customization),
-and [testing and debugging](#sec:testing).
+### Runtime
 
-The final four content chapters are practice and reference material: [guided source tours](#sec:tours),
-the [extension event reference](#sec:events), [run modes and SDK embedding](#sec:modes),
-and the [failure and recovery reference](#sec:failure). Use the [glossary](#sec:glossary)
-whenever a term becomes dense.
+3. [Prompt lifecycle](#sec:prompt-lifecycle) traces Enter to settlement.
+4. [Agent core](#sec:agent-core) explains the reusable loop, events, queues,
+   and tool batches.
+5. [Built-in tools](#sec:tools) turns the loop into filesystem and shell
+   operations.
 
-The [glossary](#sec:glossary) is a quick reference for terms that recur across
-the codebase.
+### Build extensions
+
+6. [Extensions](#sec:extensions) is the canonical first runnable example.
+7. [Customization and workflow](#sec:customization) turns that demo into a
+   production extension and follows immediately after it.
+
+### Subsystems and contribution
+
+8. [Sessions and durable context](#sec:sessions).
+9. [Resources, settings, and trust](#sec:resources).
+10. [Models, providers, and authentication](#sec:models).
+11. [The terminal UI](#sec:tui).
+12. [Testing, debugging, and contribution](#sec:testing).
+
+### Practice and reference
+
+13. [Guided source tours](#sec:tours).
+14. [Extension event reference](#sec:events).
+15. [Run modes and SDK embedding](#sec:modes).
+16. [Failure and recovery](#sec:failure).
+17. [Glossary](#sec:glossary).
 
 ## Source map used for this guide
 
-The guide was checked against the package manifests, the extension examples,
-the coding-agent extension documentation, and these implementation seams:
+The guide is checked against package manifests, extension examples, coding-agent
+documentation, and these implementation seams:
 
 - CLI composition: `packages/coding-agent/src/main.ts` and
   `src/core/agent-session-services.ts`.
@@ -207,11 +251,11 @@ the coding-agent extension documentation, and these implementation seams:
   `packages/coding-agent/src/core/sdk.ts` and `src/core/agent-session.ts`.
 - Low-level loop and tool execution: `packages/agent/src/agent.ts`,
   `src/agent-loop.ts`, and `src/types.ts`.
-- Provider dispatch: `packages/ai/src/compat.ts`, `packages/ai/src/models.ts`,
-  and `packages/ai/src/types.ts`.
+- Provider dispatch: `packages/ai/src/compat.ts`, `src/models.ts`, and
+  `src/types.ts`.
 - Extension contract and loading: `packages/coding-agent/src/core/extensions/`
   plus `packages/coding-agent/docs/extensions.md`.
 
-The repository evolves. If a symbol named in this book moves, use
-`rg "symbolName" packages` from the repository root, then update your mental
-model from the current implementation rather than preserving an old path.
+The repository evolves. If a symbol named in this book moves, search from the
+repository root with `rg "symbolName" packages`, then update your mental model
+from the current implementation rather than preserving an old path.

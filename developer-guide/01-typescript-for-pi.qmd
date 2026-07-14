@@ -1,310 +1,117 @@
 # Reading and changing Pi's TypeScript {#sec:typescript}
 
-Pi is written as native ECMAScript modules in TypeScript. This chapter is for a
-developer who knows basic JavaScript but has little or no TypeScript experience.
-Its goal is not to teach the entire language. Its goal is to help you open a Pi
-`.ts` file, understand the runtime values and type descriptions, trace the
-important branches, and make a small safe change.
+Pi is written in TypeScript, but a contributor does not need the whole language
+before opening the source. This chapter is the short, Pi-oriented route: learn
+the syntax that lets you follow package boundaries, events, tools, and
+cancellation, then continue directly to [architecture](#sec:architecture).
 
-The chapter follows one small status-reporting tool as it grows. Each step adds
-one idea that appears in Pi's source. After the guided path, the reference
-sections collect errors, utility types, and a glossary.
+::: {.callout-note title="Choose your route"}
+- **Comfortable with TypeScript:** continue in this chapter, then read
+  [architecture](#sec:architecture).
+- **JavaScript-only or new to TypeScript:** read the optional
+  [TypeScript foundations workbook](17-typescript-foundations-workbook.qmd)
+  first, then return here for Pi's patterns.
+- **Need one concept:** jump to the workbook's [Everyday Types](17-typescript-foundations-workbook.qmd#everyday-typescript-fundamentals),
+  [modules](17-typescript-foundations-workbook.qmd#modules-and-imports),
+  [unions](17-typescript-foundations-workbook.qmd#discriminated-unions-in-pi),
+  or [TypeBox practice](17-typescript-foundations-workbook.qmd#typebox-practice-from-external-data-to-a-tool-parameter).
+  It keeps the longer explanations, exercises, beginner mistakes, and
+  reference tables that were moved out of this route.
+:::
 
-## How to use this chapter
+## What this route teaches
 
-Read the first five parts in order. Every new TypeScript idea starts with a
-small JavaScript-shaped example, then adds the type information Pi uses. In
-this chapter, a **value** is something the running program can use, a **type**
-is a description checked before the program runs, and a **module** is one file
-that can import and export names. Those three words explain most of the
-language-specific syntax that follows.
+The goal is recognition, not memorization. By the end you should be able to:
 
-## What you should know first
+- distinguish install, runtime execution, and type checking;
+- read modules and public package imports;
+- follow a discriminated union and a callback stored for later;
+- treat external data as `unknown` until evidence makes it safe;
+- distinguish a TypeBox runtime schema from its `Static` compile-time type;
+- follow a Promise, an async stream, and an `AbortSignal` into the operation;
+- identify the source files and call sites to inspect before changing Pi.
 
-You should be comfortable with:
+If a primitive, optional property, assertion, or nullish operator is unfamiliar,
+use the [Everyday Types foundations](17-typescript-foundations-workbook.qmd#everyday-typescript-fundamentals)
+in the workbook rather than stopping the Pi route.
 
-- variables, strings, numbers, booleans, objects, and arrays
-- `if`, `for`, `return`, and basic function calls
-- the idea that a Promise represents a result that arrives later
+## Setup and runtime orientation
 
-You do **not** need prior TypeScript experience. You also do not need to learn
-every advanced TypeScript feature before contributing. Conditional-type
-metaprogramming, decorators, declaration merging, namespaces, and elaborate
-mapped types are outside this chapter's main path.
+### Install, run, and check are different actions
 
-## The five questions to ask when reading Pi code
-
-When a TypeScript file looks dense, ask these questions in order:
-
-1. **What is the runtime value?** Types, interfaces, and `import type` vanish
-   after checking; objects, functions, arrays, and classes remain.
-2. **What shape does the value have?** Look for an interface, type alias, schema,
-   or generic that describes it.
-3. **Which check selects the shape?** A `type` or `role` tag often narrows a
-   union to one variant.
-4. **Where did the value cross a boundary?** JSON, model output, config files,
-   and network responses need runtime validation.
-5. **Who owns the work?** Identify the callback, `AbortSignal`, array snapshot,
-   class, or cleanup method responsible for the operation.
-
-These questions are more useful than memorizing isolated syntax rules.
-
-### 0. Set up the workspace and run TypeScript
-
-Understanding an example is useful only if you can reproduce it. Pi's setup
-has three separate actions:
-
-| Action | Meaning | Typical command |
+| Job | What it does | Example |
 |---|---|---|
-| **Install** | download the packages named by the repository | `npm install --ignore-scripts` |
-| **Run** | execute JavaScript or erasable TypeScript | `node --experimental-strip-types file.ts` or the project launcher |
-| **Check** | ask the type checker to find mistakes without running the program | `npx tsgo --noEmit` |
+| Install | Gets the repository's packages | `npm install --ignore-scripts` |
+| Run | Executes JavaScript or erasable TypeScript | `node --experimental-strip-types example.ts` |
+| Check | Finds type errors without running the program | `npx tsgo --noEmit` |
 
-The commands do different jobs. A file can run successfully while the type
-checker rejects it, and a type checker cannot help if the required dependencies
-are not installed.
+Running code does not automatically check its types. Node's native type
+stripping removes erasable type syntax; it does not type-check the file or
+transform TypeScript constructs that need JavaScript emit. `tsx` is a development
+runner and `jiti` loads extensions. `tsgo` is the repository's TypeScript-native
+checker/build tool: `tsgo --noEmit` checks without writing output.
 
-#### Install the workspace dependencies
-
-From the repository root, check the required Node version first:
-
-```bash
-node --version
-```
-
-Then install the workspace dependencies:
-
-```bash
-npm install --ignore-scripts
-```
-
-`--ignore-scripts` prevents package lifecycle scripts from running during this
-basic setup. For a clean checkout where the lockfile must be followed exactly,
-use:
-
-```bash
-npm ci --ignore-scripts
-```
-
-The repository contains several workspace packages. A package import such as
-`@earendil-works/pi-ai` can resolve to another package in this same checkout
-rather than to a separate copy from the network.
-
-To add a dependency, distinguish code needed at runtime from a tool needed only
-during development:
-
-```bash
-npm install example-runtime-package
-npm install --save-dev example-development-tool
-```
-
-Dependency changes update `package.json` and usually the lockfile. Review both
-files before sharing the change; installing a package is not a TypeScript
-operation.
-
-#### Run a TypeScript file
-
-A small erasable `.ts` file can be run by a supported Node version with type
-stripping:
-
-```bash
-node --experimental-strip-types /path/to/example.ts
-```
-
-Pi's source and extension workflows may instead use `tsx`, `jiti`, or the
-repository launcher. These tools make source execution convenient, but they do
-not replace type checking. Use the project's documented launcher when running
-the agent rather than inventing a new one-off command.
-
-#### Check the code
-
-A focused check asks `tsgo` to inspect the project without emitting JavaScript:
-
-```bash
-npx tsgo --noEmit
-```
-
-The repository-wide gate does more than type checking:
-
-```bash
-npm run check
-```
-
-The normal beginner loop is:
+The normal loop is:
 
 ```text
-install dependencies → edit → run a focused example → type-check → run the gate
+install -> write a small example -> run it -> check it -> inspect the error
 ```
 
-#### Setup troubleshooting
+For a guide-only change, render the book. For code changes, the repository
+quality gate is `npm run check`.
 
-| Symptom | First check |
-|---|---|
-| `command not found: tsgo` | dependencies are not installed; run the workspace install |
-| `Cannot find module` | check the package install, import path, `.ts` suffix, and tsconfig mapping |
-| file runs but the check fails | stripping/transpiling ran code but did not type-check it |
-| a dependency works but changes the lockfile | inspect `package.json` and the lockfile before sharing |
+### Pi's erasable TypeScript boundary
 
-**Checkpoint:** Which command installs packages? Which runs a file? Which checks
-types? What can succeed while the others fail?
+Pi source avoids TypeScript syntax that needs a JavaScript transform, including
+constructor parameter properties, `enum`, and `namespace`. Prefer explicit
+fields, literal unions, and ESM imports. This matters when a file is run by
+native Node stripping rather than compiled first.
 
----
-
-## Part 1: First contact with a TypeScript file
-
-### 1. Read a `.ts` file in 60 seconds
-
-**Vocabulary:** a *value* is data available while the program runs. An
-*annotation* is a type written by the author. The *type checker* reads those
-annotations and reports inconsistent values before the program runs. The
-*runtime* is the JavaScript execution itself.
-
-Start with ordinary JavaScript. Nothing in this function tells JavaScript what
-`user` should look like:
-
-```js
-function greeting(user) {
-  return `Hello, ${user.name}`;
-}
-
-greeting({ name: "Ada" });
-```
-
-TypeScript adds a description of the value flow:
+`declare` is a type-checking-only declaration: it tells TypeScript that a value
+exists but emits no JavaScript. It is useful in small type-reading examples,
+not as a way to create a runtime value:
 
 ```ts
-interface User {
-  name: string;
-}
-
-function greeting(user: User): string {
-  return `Hello, ${user.name}`;
-}
+declare const raw: unknown;
+const claimed = raw as string; // assertion only; no runtime validation
 ```
 
-The `interface User` and the `: User` and `: string` annotations help the editor
-and type checker. They do not insert checks into the running function. After
-Node strips the annotations, the runtime operation is still property access and
-string interpolation.
+### Readiness check
 
-Compare the visible TypeScript with what remains at runtime:
+Before continuing, confirm that you can answer these questions. If not, start
+with the linked workbook section.
 
-```ts
-// Written and checked
-function greeting(user: User): string {
-  return `Hello, ${user.name}`;
-}
+1. Which command installs packages, which runs a file, and which checks types?
+2. What is the difference between a value at runtime and a type before runtime?
+3. When a property is written `name?: string`, what value can a read produce?
+4. What evidence narrows `string | number` to one branch?
+5. What does `as User` change, and what does it *not* validate?
 
-// Runtime shape after type syntax is removed
-function greeting(user) {
-  return `Hello, ${user.name}`;
-}
-```
+## Everyday Types at a glance
 
-A type checker can reject this call before execution:
+Use this compact table while reading Pi. The workbook gives the full lesson,
+worked dashboard, practice lab, and common-error explanations.
 
-```ts
-// greeting({ name: 42 }); // number is not assignable to string
-```
+| Syntax | What the checker sees | Reading question |
+|---|---|---|
+| `const name = "Ada"` | a literal string value | Can this binding change? |
+| `let name = "Ada"` | generally `string` | Could another string be assigned? |
+| `const ids: number[] = []` | an array of numbers | Can an index be missing? |
+| `last?: string` | an optional property | What happens when it is absent? |
+| `string | number` | one of two alternatives | Which check narrows it? |
+| `"idle" | "running"` | a closed literal vocabulary | Which values are allowed? |
+| `value as User` | an assertion to the checker | What runtime evidence supports it? |
+| `Static<typeof Schema>` | a derived compile-time type | Where does runtime checking happen? |
 
-Compare three annotation choices:
+The central distinction is simple: TypeScript descriptions help the checker
+before execution; JavaScript values and checks determine what happens at
+runtime. An interface and an assertion disappear, while a schema object and a
+validator remain available to inspect data.
 
-```ts
-// JavaScript: no declared contract
-function show(value) { return value.name; }
+## Modules and imports
 
-// TypeScript: input contract, inferred return type
-function showTyped(value: { name: string }) {
-  return value.name; // string
-}
-
-// TypeScript: input and output contracts are both explicit
-function showExplicit(value: { name: string }): string {
-  return value.name;
-}
-```
-
-The middle and final versions are checked the same way for callers. The final
-version makes the public return contract easier to see.
-
-But a value arriving from JSON can still be wrong at runtime. We will return to
-that boundary in Section 8.
-
-#### Small JavaScript features that appear everywhere
-
-These are JavaScript features, not special TypeScript features:
-
-```ts
-const name = user.name;
-const label = `User: ${name}`;       // template string
-const first = users[0];              // array indexing
-const copy = [...users];             // shallow array copy
-const { name: displayName } = user;  // destructuring
-
-function joinLabels(separator: string, ...labels: string[]): string {
-  return labels.join(separator);     // rest parameters collect remaining args
-}
-```
-
-Optional chaining avoids a property access when the left side is missing:
-
-```ts
-const firstName = users[0]?.name;
-```
-
-Nullish coalescing supplies a fallback only for `null` or `undefined`:
-
-```ts
-const timeout = options.timeoutMs ?? 5_000;
-```
-
-That differs from `||`, which also treats `0`, `false`, and `""` as falsey:
-
-```ts
-const zero = 0 || 10;   // 10 — often surprising
-const zero2 = 0 ?? 10;  // 0  — nullish coalescing preserves zero
-```
-
-These operators are used in Pi before any TypeScript-specific feature is
-involved.
-
-#### What is type-only?
-
-The checker understands these declarations, but the runtime does not receive
-them:
-
-```ts
-interface User { name: string }
-type UserId = string;
-
-function readUser(id: UserId): User {
-  return { name: id };
-}
-```
-
-The function and returned object remain. `User` and `UserId` do not become
-runtime objects. A type annotation is not a conversion and not validation.
-
-#### Checkpoint
-
-You should now be able to:
-
-- identify which lines perform runtime work
-- recognize annotations as descriptions rather than checks
-- explain what `?.` and `??` do
-- distinguish a shallow spread copy from a deep clone
-
-If those are clear, continue. Every later section adds one layer to this same
-mental model.
-
-### 2. Files, exports, and imports
-
-A **module** is one file with an explicit set of names it exports and imports.
-**ESM** means ECMAScript modules, the JavaScript module system Pi uses. A
-*public surface* is the set of names other files are allowed to use.
-
-A module is a file with an explicit public surface. Pi uses ECMAScript modules.
-Start with a named export:
+A **module** is a file that exports names for other files and imports names it
+uses. Runtime values and compile-time-only types can be imported separately:
 
 ```ts
 // math.ts
@@ -312,1159 +119,131 @@ export function add(left: number, right: number): number {
   return left + right;
 }
 
-export const version = 1;
+export type Pair = [number, number];
 ```
-
-Another file imports the names:
 
 ```ts
 // main.ts
-import { add, version } from "./math.ts";
+import { add, type Pair } from "./math.ts";
 
-console.log(add(2, 3), version);
+const pair: Pair = [2, 3];
+console.log(add(...pair));
 ```
 
-Pi's source imports use the `.ts` suffix for relative monorepo imports:
-
-```ts
-import { Agent } from "./agent.ts";
-import type { AgentEvent } from "./types.ts";
-```
-
-Cross-package imports use the package's public name instead:
+Within one Pi package, use relative imports with the `.ts` suffix. Across
+packages, use a public package name:
 
 ```ts
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 ```
 
-`Type` is a runtime value used to build a schema. `ExtensionAPI` is only a type,
-so `import type` makes that intent explicit and removes the import from runtime
-output.
+Prefer public entry points over deep imports into another package's source.
+The public boundary is the contract used by published consumers.
 
-Compare the two kinds of imports:
+## Discriminated unions
 
-```ts
-import { Type } from "@earendil-works/pi-ai";       // needed at runtime
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"; // erased
-
-function register(pi: ExtensionAPI): void {
-  // TypeScript checks the parameter; no ExtensionAPI object is imported here.
-  void pi;
-}
-```
-
-#### Named and default exports
-
-Both forms are valid JavaScript modules:
+A **discriminant** is a shared literal property that identifies one variant of
+a union. Read the tag first, then inspect the fields available in that branch:
 
 ```ts
-// Named
-export function run(): void {}
-import { run } from "./run.ts";
-
-// Default
-export default function run(): void {}
-import run from "./run.ts";
-```
-
-Follow the style of the file you are editing. Pi packages generally favor
-explicit named exports; extension entry files may use a default export.
-
-#### Imports you should not use
-
-Do not deep-import another package's internal source file:
-
-```ts
-// Avoid
-// import { Type } from "@earendil-works/pi-ai/src/internal/helper.ts";
-
-// Prefer the public entry point
-import { Type } from "@earendil-works/pi-ai";
-```
-
-Do not use a dynamic import merely to express an ordinary type dependency:
-
-```ts
-// Avoid
-// type Agent = import("./agent.ts").Agent;
-
-// Prefer a top-level type-only import
-import type { Agent } from "./agent.ts";
-```
-
-A cycle involving only types can often be broken with `import type` or by moving
-shared types into a third file. A cycle involving runtime values deserves more
-investigation; it may indicate a weak module boundary.
-
-#### Checkpoint
-
-For a new import, ask:
-
-- Is it relative or cross-package?
-- Does a relative import have `.ts`?
-- Is the imported name a runtime value or a type?
-- Am I importing through the package's public surface?
-
-Pi examples of these conventions appear in
-`packages/coding-agent/examples/extensions/` and throughout the package source.
-
-### 3. Describe values: annotations, inference, and shapes
-
-**Vocabulary:** a *shape* is the set of fields and field types an object has. A
-*literal type* is one exact value such as `"running"`. An *intersection* (`&`)
-combines requirements. *Widening* is TypeScript choosing a broader type such as
-`string` instead of the literal `"running"`.
-
-You can annotate values explicitly or let TypeScript infer their types:
-
-```ts
-const count: number = 3;
-const countInferred = 3; // number
-
-function add(left: number, right: number): number {
-  return left + right;
-}
-
-function addInferred(left: number, right: number) {
-  return left + right; // return type inferred as number
-}
-```
-
-Inference follows rules. A mutable string variable usually widens to `string`:
-
-```ts
-let role = "user";          // string
-const fixedRole = "user";   // "user"
-```
-
-The narrow literal is useful when a value must belong to a closed set:
-
-```ts
-type Role = "user" | "assistant";
-const role: Role = fixedRole;
-// const badRole: Role = role; // role may be either allowed literal
-```
-
-#### Interfaces and type aliases
-
-Both can describe an object shape:
-
-```ts
-interface RunOptions {
-  timeoutMs?: number;
-  signal?: AbortSignal;
-}
-
-type RunOptionsAlias = {
-  timeoutMs?: number;
-  signal?: AbortSignal;
-};
-```
-
-The practical convention in Pi is:
-
-- use `interface` for public object APIs that may be extended
-- use `type` for unions, intersections, and utility-based aliases
-
-A type alias also names a union naturally:
-
-```ts
-type RunState = "idle" | "streaming" | "error";
-```
-
-Interfaces extend object shapes with `extends`; type aliases compose with `&`:
-
-```ts
-interface EventBase { timestamp: number }
-interface ClickEvent extends EventBase { x: number; y: number }
-
-type Label = { label: string };
-type LabeledClick = ClickEvent & Label;
-```
-
-These are type relationships. They do not create runtime inheritance.
-
-#### Optional, required, and undefined
-
-These declarations express different contracts:
-
-```ts
-interface MayBeAbsent {
-  timeoutMs?: number;              // key may be absent
-}
-
-interface PresentButUndefined {
-  timeoutMs: number | undefined;   // key must exist
-}
-
-interface RequiredNumber {
-  timeoutMs: number;               // key and number are required
-}
-```
-
-Reading an optional value requires a fallback or a check:
-
-```ts
-function effectiveTimeout(options: MayBeAbsent): number {
-  return options.timeoutMs ?? 5_000;
-}
-```
-
-#### Readonly and literal contracts
-
-`readonly` prevents assignment through that type. It is not a runtime freeze:
-
-```ts
-interface Point {
-  readonly x: number;
-  readonly y: number;
-}
-
-const point: Point = { x: 1, y: 2 };
-// point.x = 3; // error
-```
-
-`as const` preserves literal values and makes the object deeply readonly at the
-type level:
-
-```ts
-const wide = { mode: "fast", retries: 1 };
-// wide.mode is string
-
-const precise = { mode: "fast", retries: 1 } as const;
-// precise.mode is "fast"; precise.retries is 1
-```
-
-The `satisfies` operator checks a value against a type without replacing the
-value's inferred type:
-
-```ts
-type ModeConfig = { mode: "fast" | "careful"; retries: number };
-
-const config = {
-  mode: "fast",
-  retries: 2,
-} satisfies ModeConfig;
-```
-
-Use `satisfies` when you want validation of an object literal while retaining
-useful literal information for later code.
-
-Compare the three tools on one value:
-
-```ts
-type Settings = { mode: "fast" | "careful"; retries: number };
-
-const annotated: Settings = { mode: "fast", retries: 2 };
-// The variable is viewed as Settings; mode is the union, not necessarily "fast".
-
-const asserted = { mode: "typo", retries: 2 } as unknown as Settings;
-// The assertion can silence the checker; it is not a validation strategy.
-
-const checked = { mode: "fast", retries: 2 } satisfies Settings;
-// The object is checked, while its useful inferred details are retained.
-```
-
-`as` is a promise to the checker. `satisfies` asks the checker to verify the
-value. Neither one validates data that arrived from JSON; runtime validation is
-covered in Section 8.
-
-#### Structural typing and excess properties
-
-TypeScript compares object shapes rather than requiring a named relationship:
-
-```ts
-interface Named { name: string }
-
-const person = { name: "Ada", age: 36 };
-const named: Named = person; // okay; person has at least name
-```
-
-Fresh object literals receive an additional excess-property check:
-
-```ts
-// const bad: Named = { name: "Ada", age: 36 };
-// error: age does not exist in type Named
-```
-
-This catches misspelled option names, but it does not mean TypeScript rejects
-every extra property in every situation.
-
-#### The running example
-
-The chapter's status tool starts with a closed status type:
-
-```ts
-type Status = "idle" | "running" | "failed";
-
-interface StatusReport {
-  status: Status;
-  message: string;
-  updatedAt: number;
-}
-
-function formatReport(report: StatusReport): string {
-  return `${report.status}: ${report.message}`;
-}
-```
-
-The type checker now catches misspelled statuses and missing report fields. It
-still cannot validate a report loaded from JSON; that is a later boundary.
-
-Build the report in small steps:
-
-```ts
-const status: Status = "running";
-const message: string = "working";
-const updatedAt: number = Date.now();
-const report: StatusReport = { status, message, updatedAt };
-```
-
-A typo in `status` is caught while constructing the object. A parsed JSON object
-requires a runtime check even if you write `as StatusReport` afterward.
-
-This is the chapter's running example. Later sections will turn the report into
-an event, store a short history, emit updates through a callback, parse it from
-untrusted input, validate it with TypeBox, and make the work cancellable.
-
-#### Checkpoint
-
-You should be able to:
-
-- distinguish inference from an explicit annotation
-- choose `interface` or `type` for a new declaration
-- explain `?` versus `| undefined`
-- explain the difference between `readonly`, `as const`, and `satisfies`
-- read the `StatusReport` example without treating types as runtime objects
-
----
-
-## Part 2: Choose and protect a value's shape
-
-### 4. Unions, narrowing, and exhaustive branches
-
-**Vocabulary:** a *union* says a value may be one of several alternatives.
-*Narrowing* is evidence that removes alternatives. A *discriminant* (or tag) is
-a shared literal field such as `type`. A *type predicate* is a function result
-such as `value is User` that tells the checker what a successful test proved.
-
-A union means a value is one of several alternatives. Narrowing is the evidence
-that tells TypeScript which alternative is active.
-
-#### Primitive narrowing
-
-```ts
-type StringOrNumber = string | number;
-
-function double(value: StringOrNumber): string | number {
-  if (typeof value === "string") {
-    return value + value;
-  }
-  return value * 2;
-}
-```
-
-The `typeof` check changes the type inside each branch. `instanceof` performs a
-similar job for class instances:
-
-```ts
-function errorMessage(value: Error | string): string {
-  if (value instanceof Error) return value.message;
-  return value;
-}
-```
-
-Other narrowing tools include equality, `in`, truthiness, and reusable type
-predicates. Use the narrowest check that reflects the actual contract.
-
-Choose the check based on what you actually know:
-
-| Check | What it proves | Typical use |
-|---|---|---|
-| `typeof value === "string"` | primitive kind | string/number unions |
-| `value instanceof Error` | class instance | caught errors |
-| `value.type === "tool"` | tagged variant | Pi events/messages |
-| `"name" in value` | property exists | foreign or ad-hoc objects |
-| `value is User` | reusable guard contract | shared validation helper |
-
-#### Discriminated unions
-
-A discriminated union gives every variant a common tag with a different literal:
-
-```ts
-type Content =
-  | { type: "text"; text: string }
-  | { type: "image"; mediaType: string; data: string };
-
-function describe(content: Content): string {
-  switch (content.type) {
-    case "text":
-      return content.text;
-    case "image":
-      return `image: ${content.mediaType}`;
-  }
-}
-```
-
-The checker knows that `text` exists in the first branch and `mediaType` exists
-in the second. Outside a branch, only fields common to all variants are safe.
-
-Compare a real union with an optional-field bag:
-
-```ts
-// Weak: the tag and fields do not describe a reliable shape
-type WeakContent = {
-  type: string;
-  text?: string;
-  mediaType?: string;
-  data?: string;
-};
-
-// Strong: each tag selects a complete variant
-type StrongContent =
-  | { type: "text"; text: string }
-  | { type: "image"; mediaType: string; data: string };
-```
-
-Prefer the strong form when you control the data model.
-
-#### Exhaustiveness with `never`
-
-A closed union can require every case to be handled:
-
-```ts
-function describeAll(content: Content): string {
-  switch (content.type) {
-    case "text":
-      return content.text;
-    case "image":
-      return content.mediaType;
-    default: {
-      const exhaustive: never = content;
-      return exhaustive;
-    }
-  }
-}
-```
-
-If someone adds an `audio` variant without adding a case, `content` is no longer
-`never` and the checker reports the missing branch. Without the check, incomplete
-logic may compile silently.
-
-In plain language, `never` means “there is no possible value left here.” The
-`default` branch is expected to be unreachable. The assignment makes that
-expectation executable for the type checker.
-
-#### Type predicates
-
-A boolean tells the caller only that a function returned true. A type predicate
-also tells TypeScript what was proven:
-
-```ts
-function isTextBad(value: Content): boolean {
-  return value.type === "text";
-}
-
-function isText(value: Content): value is { type: "text"; text: string } {
-  return value.type === "text";
-}
-
-function uppercase(value: Content): string {
-  if (isText(value)) return value.text.toUpperCase();
-  return value.mediaType;
-}
-```
-
-Use a predicate for a reusable guard. Use a direct `if` or `switch` for a
-one-off branch.
-
-#### Nested unions
-
-Pi messages often contain one union inside another:
-
-```ts
-type Message =
-  | { role: "user"; content: string }
-  | { role: "assistant"; content: Content[] };
-
-function preview(message: Message): string {
-  if (message.role === "user") {
-    return message.content.slice(0, 40);
-  }
-
-  return message.content
-    .map((block) => {
-      switch (block.type) {
-        case "text": return block.text;
-        case "image": return `[image ${block.mediaType}]`;
-      }
-    })
-    .join(" ");
-}
-```
-
-Read from the outside in: narrow `role`, then narrow each content block.
-
-#### Literal preservation
-
-A widened `string` is not a discriminant:
-
-```ts
-const wideEvent = { type: "ping" }; // type is string
-// const event: { type: "ping" } = wideEvent; // error
-
-const narrowEvent = { type: "ping" } as const;
-const event: { type: "ping" } = narrowEvent; // okay
-```
-
-The `satisfies` operator is another option when you want to check an object while
-retaining useful inferred details.
-
-#### Pi source map
-
-The same pattern appears in:
-
-- `AgentEvent` in `packages/agent/src/types.ts`
-- event switches in `packages/agent/src/agent-loop.ts`
-- assistant content blocks in `packages/ai/src/types.ts`
-- session entries in `packages/coding-agent/src/core/session-manager.ts`
-- provider status handling in `packages/ai/src/api/openai-responses-shared.ts`
-
-When opening one of these files, find the union definition first. List its tag
-values before reading the switch.
-
-#### The running example: report events
-
-The status tool can now notify a consumer about lifecycle changes:
-
-```ts
-type StatusEvent =
-  | { type: "started"; report: StatusReport }
-  | { type: "updated"; report: StatusReport }
+type AgentNotice =
+  | { type: "started"; prompt: string }
+  | { type: "finished"; stopReason: "stop" | "error" }
   | { type: "failed"; message: string };
 
-function eventLabel(event: StatusEvent): string {
-  switch (event.type) {
+function label(notice: AgentNotice): string {
+  switch (notice.type) {
     case "started":
-    case "updated":
-      return formatReport(event.report);
+      return `started: ${notice.prompt}`;
+    case "finished":
+      return `finished: ${notice.stopReason}`;
     case "failed":
-      return `failed: ${event.message}`;
+      return `failed: ${notice.message}`;
   }
 }
 ```
 
-The tag chooses the fields available to each branch. The same reading method
-applies to Pi's `AgentEvent` union.
+The `type` check is evidence. Before narrowing, code may use only operations
+shared by every variant; after `notice.type === "failed"`, `message` is safe.
+Pi uses this pattern for agent events, message roles, content blocks, and
+session entries. Start at the union definition, then find each `if` or `switch`
+that consumes it.
 
-#### Checkpoint
+## Callbacks and closures
 
-Write a union with two variants and answer:
-
-1. Which check selects each variant?
-2. Which fields are safe only after narrowing?
-3. What happens if a third variant is added?
-4. Would a predicate or a direct branch be clearer here?
-
-**Answers:** the tag or primitive check selects the branch; variant-specific
-fields are unsafe before that check; an exhaustive switch reports the new
-variant; a predicate is useful when the same test is reused, while a direct
-branch is simpler once.
-
-### 5. Mutability, snapshots, and copies
-
-**Vocabulary:** an *object reference* is a value pointing to an object. An
-*alias* is a second reference to the same object. A *shallow copy* creates a new
-outer container but keeps nested references. A *deep copy* creates independent
-nested data. A *snapshot* is a copy retained to represent an earlier state.
-
-TypeScript does not change JavaScript reference behavior. A spread creates a new
-outer object but does not clone nested objects:
+A **callback** is a function passed to another function to be called now or
+later. Registration stores the function; invocation calls it:
 
 ```ts
-type State = { level: string; meta: { count: number } };
+type Listener = (message: string) => void;
+let listener: Listener | undefined;
 
-const previous: State = { level: "low", meta: { count: 1 } };
-const next = { ...previous, level: "high" };
-
-next.meta.count = 99;
-// previous.meta.count is also 99 — the nested object is shared
-console.log(next === previous);           // false: new outer object
-console.log(next.meta === previous.meta); // true: shared nested object
-```
-
-Arrays behave similarly:
-
-```ts
-type Message = { text: string };
-const messages: Message[] = [{ text: "a" }, { text: "b" }];
-const snapshot = messages.slice();
-
-messages.push({ text: "c" }); // snapshot length remains 2
-snapshot[0].text = "changed"; // messages[0].text also changes
-console.log(snapshot === messages);       // false: new array
-console.log(snapshot[0] === messages[0]);  // true: shared element
-```
-
-Choose the operation for the ownership you need:
-
-| Operation | New container | New nested objects | Typical use |
-|---|---:|---:|---|
-| `{ ...object }` | yes | no | shallow object update |
-| `array.slice()` / `[...array]` | yes | no | snapshot order/length |
-| `array.map(...)` | yes | depends on mapper | transform |
-| `structuredClone(value)` | yes | yes for cloneable data | deep copy |
-
-`structuredClone` cannot clone functions, DOM nodes, or every class instance.
-Do not deep-clone large trees merely because a shallow snapshot is unfamiliar.
-
-A `readonly` parameter protects the container through that reference:
-
-```ts
-function publish(items: readonly Message[]): number {
-  // items.push({ text: "x" }); // error
-  return items.length;
+function register(next: Listener): void {
+  listener = next;
 }
 
-const live: Message[] = [{ text: "a" }];
-publish(live); // mutable arrays can be viewed as readonly
+function emit(message: string): void {
+  listener?.(message);
+}
+
+register((message) => console.log(message));
+emit("ready");
 ```
 
-It does not deeply freeze the message objects. `as const` is stronger for a
-literal value, but neither changes another alias that holds the same object.
+The common error is `register(next())`: that calls `next` immediately and passes
+its return value, rather than passing the function. A **closure** is a function
+that remembers variables from where it was created. Look for the cleanup API
+when a closure is stored in a long-lived registry.
 
-Prefer explicit new containers for state transitions:
+Pi handlers often receive a full contract even when they use only one argument:
 
 ```ts
-type RunState = {
-  status: "idle" | "running";
-  messages: readonly Message[];
-};
+function onMessage(handler: (text: string, source: string) => void): void {
+  handler("ready", "agent");
+}
 
-function appendMessage(state: RunState, message: Message): RunState {
-  return {
-    ...state,
-    status: "running",
-    messages: [...state.messages, message],
-  };
+onMessage((text, _source) => console.log(text));
+```
+
+Names such as `_event`, `_signal`, and `_ctx` commonly mean that a parameter is
+part of the contract but unused by this handler.
+
+## `unknown` versus `any`
+
+At a JSON, configuration, network, model, or extension boundary, the checker
+cannot prove that incoming data has the expected shape. `any` disables that
+question:
+
+```ts
+function unsafe(value: any): string {
+  return value.name.toUpperCase();
 }
 ```
 
-Pi snapshots message and tool lists around agent runs. The event contract still
-determines whether payload objects may be mutated.
-
-For the running example, a history can expose a readonly view while updates
-create a new array:
+`unknown` requires evidence before use:
 
 ```ts
-function addEvent(
-  history: readonly StatusEvent[],
-  event: StatusEvent,
-): readonly StatusEvent[] {
-  return [...history, event];
-}
-```
-
-The caller can retain the old history safely; the event objects themselves are
-still only as immutable as their declared fields.
-
-#### Checkpoint
-
-Predict the result of each operation before running it:
-
-- nested property after object spread
-- array length after `.slice()` and a later `push`
-- element mutation through a readonly array
-- whether `structuredClone` is appropriate for a class instance
-
-**Answers:** a nested property remains shared after spread; a sliced array keeps
-its old length; `readonly` blocks array operations through that reference but
-does not deeply freeze elements; `structuredClone` is not a general solution
-for class instances or functions.
-
----
-
-## Part 3: Functions, reusable types, and data boundaries
-
-### 6. Functions, callbacks, and closures
-
-**Vocabulary:** a *function type* describes the parameter and return types of a
-function. A *callback* is a function passed to another function to be called now
-or later. A *closure* is a function that remembers variables from its defining
-scope. `this` is the receiver selected when an ordinary method is called.
-
-Functions are values. They can be stored, passed to another function, or returned
-from a factory. This is the basis of Pi extension handlers and tool execution.
-
-#### Function types
-
-```ts
-type Callback = () => void;
-type Mapper = (value: number) => string;
-
-const callback: Callback = () => console.log("ready");
-const mapper: Mapper = (value) => String(value);
-```
-
-Compare a direct call, an immediate callback, and a stored callback:
-
-```ts
-function announce(): void { console.log("ready") }
-
-announce(); // direct call: runs now
-
-function callNow(handler: Callback): void {
-  handler(); // callback runs during this function
-}
-
-function storeForLater(handler: Callback): () => void {
-  return () => handler(); // callback runs when the returned function is called
-}
-```
-
-A callback is not called when it is registered:
-
-```ts
-let onReady: Callback | undefined;
-
-function register(handler: Callback): void {
-  onReady = handler; // stores it
-}
-
-function fire(): void {
-  onReady?.(); // calls it later
-}
-
-register(() => console.log("go"));
-fire();
-```
-
-The common mistake is `register(handler())`, which calls the function now and
-passes its result instead of passing the function.
-
-The running status tool uses the same relationship:
-
-```ts
-type StatusListener = (event: StatusEvent) => void;
-
-function createReporter(listener: StatusListener): (event: StatusEvent) => void {
-  return (event) => listener(event);
-}
-
-const report = createReporter((event) => console.log(eventLabel(event)));
-// report({ type: "failed", message: "timeout" }); // invoked later
-```
-
-#### Closures
-
-A closure remembers variables from the scope where it was created:
-
-```ts
-function makeCounter(): () => number {
-  let count = 0;
-  return () => {
-    count += 1;
-    return count;
-  };
-}
-
-const next = makeCounter();
-next(); // 1
-next(); // 2
-```
-
-Closures are useful for small private state. A long-lived registry can also keep
-large objects alive, so unsubscribe or dispose when the API provides it.
-
-The same feature can retain more than intended:
-
-```ts
-function registerLargeObject(registry: Array<() => void>, object: object): void {
-  registry.push(() => console.log(object)); // closure retains object
-}
-```
-
-Capture only what the callback needs when a registry may live for a long time.
-
-#### Arrow functions and `this`
-
-JavaScript resolves `this` at call time for ordinary methods:
-
-```ts
-class Service {
-  private label = "service";
-
-  dumpMethod(): string {
-    return this.label;
+function readName(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || !("name" in value)) {
+    return undefined;
   }
 
-  dumpArrow = (): string => this.label;
-}
-
-const service = new Service();
-const method = service.dumpMethod;
-// method(); // detached method loses the instance receiver
-
-const arrow = service.dumpArrow;
-arrow(); // still works; arrow captured the instance
-```
-
-Arrow fields capture the surrounding `this`; methods do not. Use methods for
-normal class APIs and arrow fields when a handler will be detached and must keep
-its instance context.
-
-#### Parameters and callback context
-
-Optional and default parameters both allow omission, but defaults add a runtime
-fallback:
-
-```ts
-function connect(host: string, port?: number): string {
-  return `${host}:${port ?? 443}`;
-}
-
-function connectWithDefault(host: string, port = 443): string {
-  return `${host}:${port}`;
+  const name = value.name;
+  return typeof name === "string" ? name : undefined;
 }
 ```
 
-Extension APIs may require a full callback signature even when one parameter is
-unused. Name intentionally unused parameters with `_`:
-
-```ts
-// Simplified local types for the shape of a Pi-style callback
-interface SessionStartEvent { type: "session_start" }
-interface SessionContext { log(message: string): void }
-
-// Illustrative registration API
-function onSessionStart(
-  handler: (event: SessionStartEvent, context: SessionContext) => void,
-): void {}
-
-onSessionStart((_event, context) => {
-  context.log("started");
-});
-```
-
-#### Checkpoint
-
-- Type a callback that accepts a string and returns `void`.
-- Show the difference between registering and calling a handler.
-- Explain why a detached ordinary method can lose `this`.
-- Identify what a closure keeps alive.
-
-**Answers:** use `(value: string) => void`; registration passes the function
-without parentheses; a detached method no longer has its original receiver;
-a closure retains every outer variable it references.
-
-### 7. Generics and the utility types worth recognizing
-
-**Vocabulary:** a *generic* is a type parameter chosen when code is used. `T`
-usually means “some caller-selected type.” A *constraint* limits that choice.
-`keyof T` means the union of keys on `T`; `T[K]` means the value type at key `K`.
-A *utility type* transforms an existing type into a related shape.
-
-Generics preserve a relationship between inputs and outputs. Without them, a
-helper either duplicates implementations or falls back to `any`:
-
-```ts
-function firstAny(items: any[]): any {
-  return items[0];
-}
-
-function first<T>(items: readonly T[]): T | undefined {
-  return items[0];
-}
-
-const text = first(["a", "b"]); // string | undefined
-const number = first([1, 2]);    // number | undefined
-```
-
-Read `T` as “some type selected by the caller.” It is not a runtime value:
-
-```ts
-function identity<T>(value: T): T {
-  return value;
-}
-
-const message = identity("hello"); // T inferred as string
-const count = identity(3);          // T inferred as number
-```
-
-#### Constraints
-
-A constraint gives the implementation a safe property to use:
-
-```ts
-function nameOf<T extends { name: string }>(value: T): string {
-  return value.name;
-}
-
-nameOf({ name: "Ada", age: 36 });
-// nameOf({ age: 36 }); // error: name is missing
-```
-
-`keyof` creates a union of an object's keys. Indexed access returns the value type
-for a selected key:
-
-```ts
-function getField<T, K extends keyof T>(object: T, key: K): T[K] {
-  return object[key];
-}
-
-const user = { name: "Ada", age: 36 };
-// keyof typeof user is "name" | "age"
-const name = getField(user, "name"); // T is user; K is "name"; result is string
-// getField(user, "email"); // error: "email" is not a key of user
-```
-
-Generic object types are common for results:
-
-```ts
-interface Result<T> {
-  ok: boolean;
-  data: T;
-}
-
-const users: Result<string[]> = { ok: true, data: ["Ada"] };
-```
-
-`readonly T[]` accepts both mutable and readonly arrays when the helper only
-reads them. It communicates ownership without a runtime freeze.
-
-#### Utility types
-
-Recognize these when reading Pi code:
-
-```ts
-interface Retry {
-  maxAttempts: number;
-  backoffMs: number;
-}
-
-type RetryPatch = Partial<Retry>;       // both properties optional
-type RetryRequired = Required<RetryPatch>;
-type RetryReadonly = Readonly<Retry>;   // shallow top-level readonly
-
-type RetryIdentity = Pick<Retry, "maxAttempts">;
-type RetryWithoutBackoff = Omit<Retry, "backoffMs">;
-type Labels = Record<"idle" | "running", string>;
-```
-
-See the transformations directly:
-
-```ts
-interface Retry { maxAttempts: number; backoffMs: number }
-
-type Patch = Partial<Retry>;              // both keys optional
-type Identity = Pick<Retry, "maxAttempts">; // keep one key
-type WithoutBackoff = Omit<Retry, "backoffMs">;
-type RequiredRetry = Required<Patch>;      // both keys required again
-```
-
-Other useful readers:
-
-```ts
-function connect(host: string, port: number): boolean { return true; }
-type Args = Parameters<typeof connect>;   // [string, number]
-type Output = ReturnType<typeof connect>; // boolean
-
-type MaybeName = string | null | undefined;
-type Name = NonNullable<MaybeName>;      // string
-```
-
-With `Record<string, boolean>`, any string key is accepted. With
-`Record<"idle" | "running", string>`, every key in the closed union is required.
-Prefer an explicit type when a utility expression hides the actual contract.
-
-#### Pi bridge: schema inference
-
-Pi's `defineTool` uses a generic schema parameter to connect the runtime
-`parameters` value to the static `params` argument. You do not need to reproduce
-that type machinery. When reading it, ask which relationship the generic is
-preserving.
-
-The status event helper can use the same relationship without knowing a
-particular event type:
-
-```ts
-function send<E>(event: E, listener: (event: E) => void): void {
-  listener(event);
-}
-
-send<StatusEvent>(
-  { type: "failed", message: "timeout" },
-  (event) => console.log(eventLabel(event)),
-);
-```
-
-`E` is not a runtime constructor. It preserves the type relationship between
-what `send` receives and what its listener receives.
-
-#### Checkpoint
-
-- Explain what type `first(["a"])` returns and why it includes `undefined`.
-- Read `K extends keyof T` in plain English.
-- Choose between `Pick`, `Omit`, and an explicit interface.
-- State what a generic cannot do at runtime.
-
-**Answers:** the result is `string | undefined` because the array may be empty;
-`K` must be one of `T`'s keys and `T[K]` is that key's value type; use `Pick` or
-`Omit` when the relationship should follow a source type, otherwise write an
-explicit interface; generics are erased and cannot inspect a runtime value.
-
-### 8. Untrusted data: `unknown`, `any`, and casts
-
-**Vocabulary:** a *boundary* is where data enters from outside the code that
-constructed it, such as JSON or a network response. *Untrusted* means the
-checker has no proof that the value has the expected shape. A *type assertion*
-(`as`) changes the checker's belief; it does not convert or validate the value.
-
-Types describe checked code. They do not validate a value that arrived through a
-string, network response, config file, model response, or extension boundary.
-Use `unknown` until you have evidence:
-
-```ts
-function processAny(value: any): string {
-  return value.name.toUpperCase(); // checker is disabled
-}
-
-processAny({ name: 42 }); // runtime failure
-processAny(null);         // runtime failure
-```
-
-`any` can silently flow into typed variables:
-
-```ts
-const raw: any = JSON.parse("null");
-const user: { name: string } = raw; // compiles, but runtime value is null
-```
-
-`unknown` forces a check:
-
-```ts
-function processUnknown(value: unknown): string {
-  if (!value || typeof value !== "object") return "unknown";
-  const name = (value as { name?: unknown }).name;
-  return typeof name === "string" ? name.toUpperCase() : "unknown";
-}
-```
-
-The `as` assertion did not validate `name`; the later `typeof` check did.
-
-#### Four treatments of JSON
-
-```ts
-interface User {
-  name: string;
-  age: number;
-}
-
-const text = '{"name":"Ada","age":"unknown"}';
-const raw: unknown = JSON.parse(text);
-
-// Unsafe: changes only the checker's belief
-const unsafe = raw as User;
-
-// Partial: checks one field but misses age
-if (raw && typeof raw === "object" && "name" in raw) {
-  const partial = raw as { name: string };
-}
-
-// Manual guard: returns a value built from checked fields
-function parseUser(value: unknown): User | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const candidate = value as { name?: unknown; age?: unknown };
-  if (typeof candidate.name !== "string") return undefined;
-  if (typeof candidate.age !== "number") return undefined;
-  return { name: candidate.name, age: candidate.age };
-}
-```
-
-A type predicate can make a reusable guard narrow its argument:
-
-```ts
-function isUser(value: unknown): value is User {
-  return parseUser(value) !== undefined;
-}
-```
-
-For a caught error, use the same discipline:
-
-```ts
-function messageOf(value: unknown): string {
-  return value instanceof Error ? value.message : String(value);
-}
-
-function riskyOperation(): void {
-  throw new Error("example failure");
-}
-
-try {
-  riskyOperation();
-} catch (error) {
-  console.error(messageOf(error));
-}
-```
-
-#### Boundary checklist
-
-| Boundary | Start with | Then |
-|---|---|---|
-| `JSON.parse` | `unknown` | guard or schema |
-| config file | parsed `unknown` | validate, default, migrate |
-| provider HTTP JSON | `unknown` | adapter/schema |
-| model/tool arguments | external data | validate before trust |
-| `catch (error)` | `unknown` | `instanceof` or helper |
-
-#### Checkpoint
-
-For each value in the table, identify the first runtime check you would make.
-Then explain why an interface alone cannot replace that check.
-
-**Answers:** start JSON and network data as `unknown`; narrow or validate before
-property access; an interface is erased and cannot inspect the bytes or object
-that arrived at runtime.
-
-The running report needs the same boundary treatment:
-
-```ts
-function parseStatusReport(value: unknown): StatusReport | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const candidate = value as {
-    status?: unknown;
-    message?: unknown;
-    updatedAt?: unknown;
-  };
-  if (candidate.status !== "idle" &&
-      candidate.status !== "running" &&
-      candidate.status !== "failed") return undefined;
-  if (typeof candidate.message !== "string") return undefined;
-  if (typeof candidate.updatedAt !== "number") return undefined;
-  return {
-    status: candidate.status,
-    message: candidate.message,
-    updatedAt: candidate.updatedAt,
-  };
-}
-
-const text = '{"status":"running","message":"working","updatedAt":0}';
-const report = parseStatusReport(JSON.parse(text));
-```
-
-The return value is safe to use because it was built from checked fields.
-
-### 9. Runtime schemas with TypeBox
-
-**Vocabulary:** a *schema* is a runtime description of allowed data. A *static
-type* is what the TypeScript checker derives or verifies before execution.
-`Static<typeof Schema>` means “the TypeScript type derived from the schema value
-named `Schema`.” `Value.Check` is a runtime boolean test. JSON Schema is a
-portable data-description format that tool providers can consume.
-
-TypeBox gives Pi a runtime schema and a matching static type. The schema is a
-runtime value; `Static<typeof Schema>` is a compile-time type derived from it.
+An assertion such as `value as User` changes only the checker's view. It does
+not convert, inspect, or repair the runtime value. Prefer `unknown` plus a
+narrowing guard, or a runtime schema when the boundary is shared.
+
+## TypeBox: one schema, two views
+
+TypeBox is Pi's runtime validation bridge. `Type.Object(...)` creates a schema
+value that exists while the program runs. `Static<typeof Schema>` derives a
+compile-time type for the checker. The static type does not validate a value by
+itself:
 
 ```ts
 import { Type, type Static } from "@earendil-works/pi-ai";
@@ -1472,265 +251,72 @@ import { Value } from "typebox/value";
 
 const UserSchema = Type.Object({
   name: Type.String(),
-  age: Type.Number(),
 });
 
 type User = Static<typeof UserSchema>;
 
-function readUser(raw: unknown): User | undefined {
-  if (!Value.Check(UserSchema, raw)) return undefined;
-  return raw;
-}
-
-const valid = readUser({ name: "Ada", age: 36 }); // User
-const invalid = readUser({ name: "Ada", age: "old" }); // undefined
-```
-
-If the schema changes, the derived type changes with it. This avoids maintaining
-an interface and validator that drift apart.
-
-#### Builders
-
-| Builder | Runtime meaning | Static result |
-|---|---|---|
-| `Type.String()` | string | `string` |
-| `Type.Number()` | number | `number` |
-| `Type.Boolean()` | boolean | `boolean` |
-| `Type.Object({...})` | object with fields | object type |
-| `Type.Array(X)` | array of X | `X[]` |
-| `Type.Optional(X)` | key may be omitted | `X | undefined` |
-| `Type.Union([A, B])` | either schema | `A | B` |
-| `Type.Literal("x")` | exact value | `"x"` |
-
-For example:
-
-```ts
-const SearchSchema = Type.Object({
-  pattern: Type.String({ description: "Text to find" }),
-  path: Type.Optional(Type.String()),
-  caseSensitive: Type.Boolean(),
-});
-
-type SearchParams = Static<typeof SearchSchema>;
-// { pattern: string; path?: string; caseSensitive: boolean }
-```
-
-See each builder in isolation:
-
-```ts
-const title = Type.String();
-const count = Type.Number();
-const enabled = Type.Boolean();
-const tags = Type.Array(Type.String());
-const mode = Type.Union([Type.Literal("read"), Type.Literal("write")]);
-const optionalPath = Type.Optional(Type.String());
-```
-
-Each expression is a runtime schema value. `Static<typeof title>` would be
-`string`; `Static<typeof tags>` would be `string[]`.
-
-At runtime, an optional key may be absent. In the static type, it may be
-`undefined`. Validation does not automatically fill defaults or migrate older
-config versions.
-
-#### Tool schemas
-
-A Pi extension tool uses a schema as the parameter contract. Conceptually,
-first focus only on the relationship:
-
-```ts
-// Conceptual shape — schema validation happens before execute
-const parameters = Type.Object({ message: Type.String() });
-
-type Params = Static<typeof parameters>; // { message: string }
-
-async function execute(params: Params): Promise<string> {
-  return params.message;
+const raw: unknown = { name: "Ada" };
+if (Value.Check(UserSchema, raw)) {
+  // The runtime check supplies the evidence used here.
+  const user = raw as User;
+  console.log(user.name);
 }
 ```
 
-The real Pi API adds metadata and lifecycle arguments:
+The schema is runtime data; `User` is erased. `Value.Check` answers whether an
+actual value matches the schema. TypeBox does not add defaults, perform side
+effects, or enforce application rules such as “the path exists.”
+
+### A Pi tool preview
+
+This is intentionally a **preview** of extension registration. The canonical,
+runnable staged example is in [chapter 04](04-extensions.qmd#a-complete-first-extension);
+read that chapter for discovery, reload, permissions, and the complete API.
 
 ```ts
 import { Type } from "@earendil-works/pi-ai";
-import { defineTool } from "@earendil-works/pi-coding-agent";
+import {
+  defineTool,
+  type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
 
-export default defineTool({
-  name: "status",
-  label: "Status",
-  description: "Report the current status.",
-  parameters: Type.Object({
-    message: Type.String({ description: "Status message" }),
-  }),
-  execute: async (_toolCallId, params, signal, _onUpdate, _ctx) => {
+const helloTool = defineTool({
+  name: "hello",
+  label: "Hello",
+  description: "Greet one person.",
+  parameters: Type.Object({ name: Type.String() }),
+  async execute(_toolCallId, params, signal) {
     if (signal?.aborted) {
       return { content: [{ type: "text", text: "cancelled" }] };
     }
-    return {
-      content: [{ type: "text", text: params.message }],
-    };
+    return { content: [{ type: "text", text: `Hello, ${params.name}!` }] };
   },
 });
-```
 
-`defineTool` connects the `parameters` schema to the inferred `params` type.
-The agent validates raw tool arguments before execution; the extension still
-owns its own assumptions about downstream values and side effects.
-
-The running example has now crossed the full boundary:
-
-```ts
-const StatusSchema = Type.Object({
-  status: Type.Union([
-    Type.Literal("idle"),
-    Type.Literal("running"),
-    Type.Literal("failed"),
-  ]),
-  message: Type.String(),
-  updatedAt: Type.Number(),
-});
-
-type ValidatedStatusReport = Static<typeof StatusSchema>;
-
-function validateStatus(value: unknown): ValidatedStatusReport | undefined {
-  return Value.Check(StatusSchema, value) ? value : undefined;
+export default function register(pi: ExtensionAPI): void {
+  pi.registerTool(helloTool);
 }
 ```
 
-The schema replaces the repeated field checks from Section 8 when this shape is
-shared or exposed as a tool contract.
+Read the example from the outside in: `Type.Object` is a runtime parameter
+schema; `defineTool` connects that schema to `params`; Pi validates model
+arguments before `execute`; and the returned `content` becomes the tool result.
+The optional signal should be forwarded to cancellable work.
 
-#### `StringEnum`
+## Promises, streams, and cancellation
 
-Some providers expect a JSON Schema string enum:
-
-```ts
-import { StringEnum } from "@earendil-works/pi-ai";
-
-const Operation = StringEnum(["read", "write"] as const);
-// { type: "string", enum: ["read", "write"] }
-```
-
-A union of `Type.Literal` values can emit an `anyOf`/`const` shape instead. Use
-the helper when the target provider expects the simpler enum representation.
-Its implementation is in `packages/ai/src/utils/typebox-helpers.ts`.
-
-#### Versioned configuration
-
-Validation answers “does this value match this schema?” Migration may still be
-needed:
+An `async` function returns one eventual result as a `Promise<T>`:
 
 ```ts
-interface Config { version: number; newField?: string }
-const DEFAULT_VALUE = "default";
-const config: Config = { version: 1 };
-
-if (config.version < 2) {
-  config.newField = config.newField ?? DEFAULT_VALUE;
-  // Rename or remove fields from old versions here.
-}
-```
-
-#### Pi source map
-
-- TypeBox is re-exported by `packages/ai/src/index.ts`.
-- Tool argument validation is part of the agent loop.
-- `defineTool` and its schema-derived `Static<TParams>` parameter are in
-  `packages/coding-agent/src/core/extensions/types.ts`.
-- Extension examples show the public authoring API.
-
-#### Checkpoint
-
-Read a schema and answer:
-
-1. What is its `Static` type?
-2. Which keys may be absent?
-3. Where does `Value.Check` run?
-4. Which assumptions still require application code?
-
-**Answers:** derive the object fields and their static types; `Type.Optional`
-keys may be absent; `Value.Check` inspects the actual runtime value; defaults,
-migrations, provider-specific schema formats, and side effects still require
-application code.
-
----
-
-## Part 4: Async work and object lifecycle
-
-### 10. Promises, async functions, and streams
-
-**Vocabulary:** a `Promise<T>` is an object representing one future result. A
-Promise begins *pending* and becomes *fulfilled* with a value or *rejected* with
-an error. An `async` function returns a Promise automatically. An *async
-iterable* can produce many values over time; an async generator uses `yield` to
-produce them one at a time.
-
-An `async` function always returns a Promise. Its annotation describes the
-resolved value:
-
-```ts
-async function loadCount(): Promise<number> {
-  return 3;
+async function loadStatus(): Promise<string> {
+  return "working";
 }
 
-const count: number = await loadCount();
+const status = await loadStatus();
 ```
 
-Compare a then-chain with async/await:
-
-```ts
-function loadThen(): Promise<string> {
-  return fetch("/status")
-    .then((response) => response.text());
-}
-
-async function loadAwait(): Promise<string> {
-  const response = await fetch("/status");
-  return response.text();
-}
-```
-
-Use `try/catch` around awaited work when you can recover or report the failure:
-
-```ts
-async function run(): Promise<void> {
-  try {
-    const text = await loadAwait();
-    console.log(text);
-  } catch (error) {
-    console.error(messageOf(error));
-  }
-}
-```
-
-For independent work:
-
-```ts
-const [one, two] = await Promise.all([loadCount(), loadCount()]);
-const results = await Promise.allSettled([loadCount(), loadCount()]);
-```
-
-`Promise.all` rejects when one operation rejects. `allSettled` reports every
-operation, whether fulfilled or rejected.
-
-The result shapes make the difference visible:
-
-```ts
-// Promise.all: values are available only if every operation succeeds
-const values: number[] = await Promise.all([loadCount(), loadCount()]);
-
-// allSettled: inspect each outcome separately
-for (const result of await Promise.allSettled([loadCount(), loadCount()])) {
-  if (result.status === "fulfilled") console.log(result.value);
-  else console.error(result.reason);
-}
-```
-
-#### Async iterables
-
-A Promise produces one eventual value. An async iterable produces values over
-time. `for await...of` waits for each next value, and `yield` supplies one
-value from an async generator:
+An async iterable produces multiple values over time. `for await` consumes each
+one as it arrives:
 
 ```ts
 async function* tokens(): AsyncIterable<string> {
@@ -1739,886 +325,55 @@ async function* tokens(): AsyncIterable<string> {
 }
 
 for await (const token of tokens()) {
-  process.stdout.write(token);
+  console.log(token);
 }
 ```
 
-Pi provider and agent streams use this mental model. Look for `for await` and
-async generator functions when following streaming code.
-
-A status reporter can stream updates without changing the event shape:
-
-```ts
-async function* statusUpdates(
-  events: AsyncIterable<StatusEvent>,
-): AsyncIterable<string> {
-  for await (const event of events) {
-    yield eventLabel(event);
-  }
-}
-```
-
-The event values arrive over time, but each value is still narrowed by its
-`type` tag.
-
-#### Checkpoint
-
-- Predict whether a function returns `Promise<T>` or `AsyncIterable<T>`.
-- Choose `Promise.all` or `Promise.allSettled` for a stated requirement.
-- Rewrite one then-chain using `await` and `try/catch`.
-
-**Answers:** one eventual result uses `Promise<T>`; a stream uses
-`AsyncIterable<T>`; use `all` when all work is required and `allSettled` when
-partial results matter; `await` moves the result into ordinary sequential code
-where `try/catch` can handle rejection.
-
-### 11. Cancellation with `AbortSignal`
-
-**Vocabulary:** an `AbortController` owns cancellation and can trigger it. An
-`AbortSignal` is the notification passed to work that may be cancelled. A
-*parent signal* belongs to the caller; a child operation should usually forward
-it. An abort error means cancellation happened; it is not automatically a
-programming bug.
-
-Cancellation is a signal, not an unrelated boolean:
-
-```ts
-const controller = new AbortController();
-const { signal } = controller;
-const url = "https://example.invalid/status";
-
-const response = fetch(url, { signal });
-controller.abort(); // the fetch rejects with an abort error
-```
-
-The lifecycle is:
-
-1. receive or create a signal
-2. pass it to cancellable work
-3. abort the owning controller from the cancel path
-4. distinguish expected cancellation from unexpected failure
-
-The important distinction is between checking a flag and cancelling the
-operation itself:
-
-```ts
-async function expensiveOperation(): Promise<void> {}
-
-// Checking after the work does not cancel the work
-if (signal.aborted) return;
-await expensiveOperation();
-
-// Passing the signal lets the API stop while it is running
-await fetch(url, { signal });
-```
-
-A helper should forward the signal it receives:
-
-```ts
-async function fetchBad(url: string, signal: AbortSignal): Promise<string> {
-  const response = await fetch(url); // parent cancellation is ignored
-  return response.text();
-}
-
-async function fetchGood(url: string, signal: AbortSignal): Promise<string> {
-  const response = await fetch(url, { signal });
-  return response.text();
-}
-```
-
-Handle an abort without swallowing unrelated failures:
+An `AbortSignal` carries a cancellation request from its owner to the work:
 
 ```ts
 async function load(url: string, signal: AbortSignal): Promise<string> {
-  try {
-    const response = await fetch(url, { signal });
-    return response.text();
-  } catch (error) {
-    if (signal.aborted) return "";
-    throw error;
-  }
-}
-```
-
-Use platform helpers when a child operation also needs a timeout:
-
-```ts
-async function loadWithTimeout(
-  url: string,
-  parent: AbortSignal,
-): Promise<string> {
-  const signal = AbortSignal.any([parent, AbortSignal.timeout(5_000)]);
   const response = await fetch(url, { signal });
   return response.text();
 }
 ```
 
-Do not create an unrelated child controller and expect the parent to cancel it.
-Check `signal.aborted` before expensive setup when work may start late.
-
-Pi supplies signals to agent/provider work and tool execution. Extensions that
-perform network or subprocess I/O should forward the signal from their tool
-context.
-
-The running reporter can stop waiting for updates when its parent cancels:
-
-```ts
-async function consumeStatuses(
-  events: AsyncIterable<StatusEvent>,
-  signal: AbortSignal,
-): Promise<void> {
-  for await (const event of events) {
-    if (signal.aborted) return;
-    console.log(eventLabel(event));
-  }
-}
-```
-
-For network or subprocess work inside the loop, pass the same signal to that
-operation rather than checking the flag only after the work finishes.
-
-#### Checkpoint
-
-Find the cancellation bug in each example:
-
-- a helper accepts no signal
-- a helper accepts a signal but omits it from `fetch`
-- a helper catches every error and returns a normal result
-- a child creates a controller without linking it to its parent
-
-**Answers:** the first cannot receive cancellation; the second drops the signal;
-the third hides both cancellation and unexpected failures; the fourth listens
-to a controller the parent cannot abort. The corrected pattern passes the
-parent signal into the cancellable API and handles abort separately.
-
-### 12. Classes, inheritance, and cleanup
-
-**Vocabulary:** a *class* is a runtime object template. A *field* stores state on
-an instance. A *method* is a function on the class. A *getter* looks like a
-property when called. `private`, `protected`, and `public` are visibility
-contracts. *Inheritance* lets a child class reuse a parent class's behavior.
-
-Use a class when state survives several calls, multiple methods share that state,
-or the object owns a lifetime. Use a function for a pure transformation:
-
-```ts
-export function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.max(minimum, Math.min(maximum, value));
-}
-```
-
-A plain JavaScript class already has runtime behavior:
-
-```js
-class CounterJS {
-  constructor(initial) { this.value = initial; }
-  increment() { return ++this.value; }
-}
-```
-
-TypeScript adds checked field and method contracts. A class can expose private
-state through a small public API:
-
-```ts
-class Counter {
-  private value: number;
-  private readonly handlers: Array<() => void> = [];
-
-  constructor(initial: number) {
-    this.value = initial;
-  }
-
-  increment(): number {
-    this.value += 1;
-    return this.value;
-  }
-
-  get current(): number {
-    return this.value;
-  }
-}
-```
-
-`private` is checked by TypeScript; it is not a runtime security boundary.
-`protected` allows subclasses to use a member. Public members form the API.
-
-#### `extends` and `implements`
-
-`extends` is runtime JavaScript inheritance. The child gets the parent's
-methods through the prototype chain; `super()` runs the parent constructor:
-
-```ts
-class CancellableError extends Error {
-  readonly code: string;
-
-  constructor(code: string, message: string) {
-    super(message);
-    this.code = code;
-    this.name = "CancellableError";
-  }
-}
-```
-
-The constructor must call `super()` before accessing `this`. `implements` is a
-type-checking checklist and does not create runtime behavior:
-
-```ts
-interface Startable {
-  start(): void;
-  stop(): void;
-}
-
-class Worker implements Startable {
-  start(): void {}
-  stop(): void {}
-}
-
-class WorkerWithName implements Startable {
-  protected readonly name: string;
-
-  constructor(name: string) {
-    this.name = name;
-  }
-
-  start(): void { console.log(`${this.name} started`); }
-  stop(): void { console.log(`${this.name} stopped`); }
-}
-```
-
-`protected` allows a subclass to use `name`, while callers outside the class
-cannot. `implements` only checks the class shape; it does not create methods.
-
-#### Erasable syntax in Pi
-
-A *parameter property* declares and assigns a class field inside a constructor
-parameter, such as `constructor(private value: number)`. Pi's checked TypeScript
-uses `erasableSyntaxOnly`. Avoid syntax that requires a
-compiler to generate runtime code:
-
-```ts
-// Avoid in Pi-checked source
-class Bad {
-  constructor(private value: number) {}
-}
-
-enum Mode {
-  Idle,
-  Running,
-}
-```
-
-Use explicit fields and literal unions instead:
-
-```ts
-class Good {
-  private value: number;
-
-  constructor(value: number) {
-    this.value = value;
-  }
-}
-
-type Mode = "idle" | "running";
-```
-
-Pi also avoids namespaces in favor of ESM modules.
-
-#### Cleanup and ownership
-
-A class that owns a controller or subscription owns the cleanup:
-
-```ts
-class SessionRunner implements Startable {
-  private controller = new AbortController();
-
-  start(): void {
-    this.controller = new AbortController();
-  }
-
-  stop(): void {
-    this.controller.abort();
-  }
-}
-```
-
-Pi's `Agent` and TUI classes own mutable state, listeners, buffers, and lifecycle.
-Read their public methods before reaching for private fields.
-
-#### Checkpoint
-
-- Choose a function or class for a given responsibility.
-- Explain `extends` versus `implements`.
-- Rewrite a parameter property using an explicit field.
-- Identify which object owns cleanup for a signal or subscription.
-
-**Answers:** use a function for stateless transformation and a class for shared
-state or lifetime; `extends` creates runtime inheritance while `implements`
-checks a contract; declare the field and assign it in the constructor; the class
-that creates the controller or subscription owns stopping and disposing it.
-
----
-
-## Part 5: Apply the skills to Pi
-
-### 13. Pi's runtime and developer workflow
-
-**Vocabulary:** *type stripping* removes erasable annotations so Node can run a
-`.ts` file; it does not check types. `tsx` runs TypeScript during development.
-`jiti` loads extension files on demand. `tsgo` is Pi's type-checking/build tool.
-`erasableSyntaxOnly` is a TypeScript option that rejects syntax Node cannot
-strip without generating JavaScript.
-
-Pi runs TypeScript through several mechanisms. They serve different purposes:
-
-| Situation | Mechanism | Type-checks? |
-|---|---|---:|
-| Source execution on supported Node | type stripping | no |
-| Development launcher | `tsx` | no |
-| Extension loading | `jiti` | no |
-| Package build | `tsgo` emit | yes during build |
-| Quality gate | `npm run check` | yes |
-
-Runtime success does not prove that the type checker accepts the code. The
-repository's root configuration enables strict checking and erasable syntax.
-
-A normal edit loop is:
-
-```bash
-# from the monorepo root
-npx tsgo --noEmit
-npm run check
-./pi-test.sh
-```
-
-Use a focused command while iterating, then the repository gate before sharing a
-change. Do not use `tsx` or `jiti` as substitutes for type checking.
-
-A successful run means the program started and executed. A successful type check
-means the checker found no reported type errors. You need both kinds of evidence.
-
-**Checkpoint:** Which command installs packages, which command runs code, and
-which command checks types? What does it mean if a file runs but `tsgo` fails?
-
-### 14. Guided source tour: a custom tool
-
-**Vocabulary:** a *tool* is a named operation the model can request. A *tool
-call ID* identifies one request. `execute` is the callback the host invokes
-later. A *tool result* is the runtime object returned to the host. The update
-callback and context are optional channels for progress and host services.
-
-Before the full Pi signature, reduce the idea to its core:
-
-```ts
-import { Type, type Static } from "@earendil-works/pi-ai";
-
-const parameters = Type.Object({ message: Type.String() });
-type Params = Static<typeof parameters>;
-
-async function execute(params: Params): Promise<string> {
-  return params.message;
-}
-```
-
-The real Pi API adds metadata and lifecycle arguments:
-
-Start with the public shape of a tool:
-
-```ts
-import { Type } from "@earendil-works/pi-ai";
-import { defineTool } from "@earendil-works/pi-coding-agent";
-
-export default defineTool({
-  name: "status",
-  label: "Status",
-  description: "Report a status message.",
-  parameters: Type.Object({
-    message: Type.String(),
-  }),
-  execute: async (_toolCallId, params, signal, _onUpdate, _ctx) => {
-    if (signal?.aborted) {
-      return { content: [{ type: "text", text: "cancelled" }] };
-    }
-    return { content: [{ type: "text", text: params.message }] };
-  },
-});
-```
-
-Read it in this order:
-
-1. **Imports:** `Type` and `defineTool` are runtime values.
-2. **Schema:** `parameters` is a runtime validation description.
-3. **Callback:** `execute` is stored now and invoked later.
-4. **Arguments:** `params` is statically inferred but originated as external input.
-5. **Cancellation:** `signal` can stop I/O owned by the tool.
-6. **Result:** `content` is a runtime object passed back to the host.
-
-The numbered reading order above maps directly to the code block. The real
-helper is defined in
-`packages/coding-agent/src/core/extensions/types.ts`. Its `execute` callback
-receives the tool call ID, schema-derived parameters, optional signal, update
-callback, and extension context.
-
-### 15. Guided source tour: an agent event
-
-**Vocabulary:** an *event* is a runtime record announcing that something
-happened. An *emitter* or producer creates and publishes the event. A
-*consumer* or handler receives it. An event *lifecycle* is the ordered sequence
-such as start, update, and end.
-
-The following is a simplified excerpt of the agent event union. The real union
-is larger and should be read in the source file named below:
-
-```ts
-type AgentMessage = { role: string; content: unknown };
-type AgentEvent =
-  | { type: "agent_start" }
-  | { type: "message_update"; message: AgentMessage }
-  | { type: "tool_execution_end"; toolName: string; isError: boolean };
-```
-
-The actual union is larger. The reading method is the same:
-
-1. Find the `type` literals.
-2. Locate the switch or callback consuming them.
-3. Read only fields on the selected variant.
-4. Look for `never` if all variants must be handled.
-5. Check whether the event is emitted immediately or stored for later.
-
-The agent loop in `packages/agent/src/agent-loop.ts` emits and consumes these
-lifecycle events. In other words, the loop is a producer of records and a
-handler/stream consumer decides what to do with each record. Assistant content
-blocks and session entries use similar tagged shapes.
-
-**Checkpoint:** If a new `tool_execution_cancelled` variant is added, search for
-the union definition and every switch or handler that consumes `AgentEvent`.
-Then decide whether the new payload crossed an untrusted boundary.
-
-### 16. Guided source tour: state and lifecycle
-
-**Vocabulary:** *ownership* asks which object is responsible for creating,
-changing, and releasing a resource. An *alias* is another reference to the same
-object. A *lifecycle* is the sequence from creation through active work to
-shutdown. `dispose` means release listeners, timers, processes, or other
-resources.
-
-When reading an agent run, trace ownership instead of every field:
-
-- Which function receives the `AbortSignal`?
-- Which helper forwards it to I/O?
-- Which arrays are copied before a run?
-- Which class owns listeners or buffers?
-- Which method stops or disposes the work?
-
-This connects the earlier concepts. Read this miniature from top to bottom:
-
-```ts
-class Runner {
-  private readonly listeners: Array<(message: string) => void> = [];
-  private controller = new AbortController();
-  private messages: readonly string[] = [];
-
-  onMessage(listener: (message: string) => void): void {
-    this.listeners.push(listener);
-  }
-
-  run(message: string): void {
-    this.messages = [...this.messages, message];
-    for (const listener of this.listeners) listener(message);
-  }
-
-  stop(): void {
-    this.controller.abort();
-    this.listeners.length = 0;
-  }
-}
-```
-
-Answers to the ownership questions: `listeners` belongs to `Runner`; the array
-copy prevents replacement of the old message list; the controller owns
-cancellation; `onMessage` stores callbacks; and `stop` releases both work and
-listeners.
-
-| Source pattern | Question to ask |
-|---|---|
-| `readonly Message[]` | Who may replace the container? |
-| `[...messages]` or `.slice()` | Which alias is being isolated? |
-| `signal` parameter | Is cancellation forwarded? |
-| `type` field | Which union variant is active? |
-| `private` field | Which class owns the state? |
-| `stop()` / `dispose()` | Who releases resources? |
-
-### 17. Make a small safe change
-
-**Vocabulary:** a *declaration* describes a type or function. A *construction
-site* creates a value of that type. A *caller* invokes a function. A *contract*
-is the set of assumptions callers and implementations share. A *focused check*
-is a narrow type-check or test run used while iterating.
-
-Use this workflow when changing a Pi TypeScript file:
-
-1. Find the declaration of the type or function.
-2. Find construction sites and callers.
-3. Identify discriminants and optional fields.
-4. Mark any JSON, model, network, or extension boundary.
-5. Check ownership of arrays, callbacks, signals, and cleanup.
-6. Make the smallest change that preserves the existing contract.
-7. Add a case to exhaustive switches when adding a union variant.
-8. Run a focused check, then `npm run check`.
-9. Review the diff for accidental API or runtime changes.
-
-#### Practice change: add a new event variant
-
-Suppose this union gains:
-
-```ts
-type Event =
-  | { type: "started" }
-  | { type: "finished"; durationMs: number }
-  | { type: "failed"; message: string };
-```
-
-Before editing a consumer, locate every switch over `event.type`. Add the new
-case, update the `never` check if needed, and decide whether any runtime payload
-validation is required. This is the same workflow used for larger Pi unions.
-
-A typical before/after change looks like this:
-
-```diff
- type Event =
-   | { type: "started" }
-   | { type: "finished"; durationMs: number }
-+  | { type: "failed"; message: string };
-```
-
-The declaration is only the first step. Search for construction sites that need
-to create `failed` events, consumers whose exhaustive switches now fail, and
-tests that describe the old event set. This is why a small type change can touch
-several files.
-
----
-
-## Reference: use when you get stuck
-
-### R1. Common TypeScript errors
-
-Each entry follows the same pattern: representative compiler message, plain
-meaning, smallest fix, and the main section to revisit. Error wording can vary
-slightly by TypeScript version.
-
-#### Type is not assignable
-
-```ts
-const count: number = "3"; // Type 'string' is not assignable to type 'number'
-const fixed: number = 3;
-```
-
-The value and destination types disagree. Inspect inference and annotations.
-**Return to:** Section 3.
-
-#### Property does not exist
-
-```ts
-const user = { name: "Ada" };
-// user.age; // Property 'age' does not exist on type '{ name: string; }'
-```
-
-You may have a typo, or you may need to narrow a union first.
-**Return to:** Sections 3 and 4.
-
-#### Object is possibly undefined
-
-```ts
-function lengthOf(value?: string): number {
-  // return value.length; // Object is possibly 'undefined'
-  return value?.length ?? 0;
-}
-```
-
-Use a guard, optional chaining, or a fallback.
-**Return to:** Sections 1 and 3.
-
-#### Cannot find module
-
-Typical message: `Cannot find module './neighbor.ts' or its corresponding type
-declarations.` Check the relative path, `.ts` suffix, package installation, and
-tsconfig path mapping. Do not deep-import another package's source internals.
-**Return to:** Sections 0 and 2.
-
-#### Excess property check
-
-```ts
-interface Options { timeoutMs: number }
-// const options: Options = { timeoutMs: 1, extra: true }; // error
-```
-
-Fresh object literals receive an extra-field check. Assigned variables behave
-according to structural typing. **Return to:** Section 3.
-
-#### `never` assignment fails
-
-```ts
-type Shape = { kind: "circle" } | { kind: "square" };
-
-function area(shape: Shape): number {
-  switch (shape.kind) {
-    case "circle": return 1;
-    case "square": return 4;
-    default: {
-      const exhaustive: never = shape;
-      return exhaustive;
-    }
-  }
-}
-```
-
-A new union variant requires a new case. **Return to:** Section 4.
-
-#### Generic inference fails
-
-Empty arrays provide little evidence:
-
-```ts
-function first<T>(values: readonly T[]): T | undefined { return values[0] }
-const values = first<string>([]);
-```
-
-Supply a type argument only when inference cannot determine one.
-**Return to:** Section 7.
-
-#### Import type misuse
-
-A type-only import cannot be used as a runtime value. Remove `type` for a value
-import, or change the code so the name is used only in a type position.
-**Return to:** Section 2.
-
-#### Private member access
-
-```ts
-class Store { private value = 1 }
-// new Store().value; // error
-```
-
-Use the class's public method or getter. Do not cast around ownership boundaries.
-**Return to:** Section 12.
-
-#### Erasable syntax
-
-```ts
-// Avoid under Pi's erasableSyntaxOnly
-// class Bad { constructor(private value: number) {} }
-
-class Good {
-  private value: number;
-  constructor(value: number) { this.value = value; }
-}
-```
-
-A typical message is that the syntax is not allowed when `erasableSyntaxOnly`
-is enabled. Declare the field explicitly instead. **Return to:** Sections 12 and 13.
-
-### R2. Utility type quick reference
-
-These are compile-time transformations. They do not make runtime objects
-partial, readonly, or validated. `T` means a source type, `K` means a selected
-key or union of keys, and `V` means a value type.
-
-| Type | Meaning |
-|---|---|
-| `Partial<T>` | all properties optional |
-| `Required<T>` | all properties required |
-| `Readonly<T>` | top-level properties non-reassignable |
-| `Pick<T, K>` | keep selected keys |
-| `Omit<T, K>` | remove selected keys |
-| `Record<K, V>` | map keys to values |
-| `ReturnType<typeof fn>` | function result type |
-| `Parameters<typeof fn>` | function argument tuple |
-| `NonNullable<T>` | remove `null` and `undefined` |
-
-Examples:
-
-```ts
-interface Config { port: number; host: string }
-type Patch = Partial<Config>;          // { port?: number; host?: string }
-type HostOnly = Pick<Config, "host">; // { host: string }
-type Flags = Record<"debug" | "verbose", boolean>;
-```
-
-**Return to:** Section 7. For runtime behavior, add validation or copying code
-separately.
-
-### R3. Glossary
-
-| Term | Meaning |
-|---|---|
-| ESM / module | A JavaScript file that exports and imports names |
-| Runtime | The JavaScript execution where values and side effects occur |
-| Type checker | A tool that reports type inconsistencies before execution |
-| Annotation | An explicit type written by the author |
-| Inference | The checker deriving a type from context |
-| Union | A value that may have one of several types |
-| Discriminant | A literal tag selecting a union variant |
-| Narrowing | Refining a union after a successful check |
-| Exhaustiveness | Handling every variant of a closed union |
-| `never` | A type with no possible values |
-| Type predicate | A return type such as `value is User` that narrows for callers |
-| Generic | A type parameter chosen by the caller |
-| Constraint | A limit such as `T extends HasName` |
-| `unknown` | A safe type requiring narrowing before use |
-| `any` | An escape hatch that disables checking |
-| Type assertion | An `as` claim; it is not validation |
-| Type-only import | An import removed from runtime output |
-| TypeBox schema | A runtime schema that can also produce a static type |
-| `Static<typeof S>` | The static type derived from schema `S` |
-| `AbortSignal` | A standard cancellation signal |
-| `AbortController` | The object that triggers cancellation for its signal |
-| Promise | One future fulfilled value or rejected error |
-| Callback | A function passed to be called now or later |
-| Closure | A function retaining variables from its defining scope |
-| Boundary | A point where untrusted external data enters |
-| Schema | A runtime description of allowed data |
-| `satisfies` | Checks a value against a type while preserving inference |
-| `as const` | Preserves literals and adds type-level readonly |
-| `keyof` | The union of keys in an object type |
-| Indexed access | A type expression such as `T[K]` selecting a property value type |
-| Parameter property | Constructor syntax that declares and assigns a field |
-| `protected` | A class member available to the class and its subclasses |
-| `tsgo` | Pi's type-checking/build command |
-| `tsx` | A development runner for TypeScript source |
-| `jiti` | A runtime loader used for extension files |
-| Erasable syntax | TypeScript syntax Node can strip without code generation |
-
-Common confusions:
-
-- `as` is not conversion; it changes only the checker's belief.
-- `readonly` is not `Object.freeze`; it is normally a static restriction.
-- `extends` creates runtime inheritance; `implements` only checks a shape.
-- `Static<typeof Schema>` is a compile-time type; the schema value is runtime.
-
-### R4. Cumulative self-check
-
-Read this small Pi-shaped function from outside in. It combines a union,
-`unknown`, a callback, a Promise, and cancellation only after each concept has
-been introduced in the main path:
-
-```ts
-type Input =
-  | { type: "message"; text: string }
-  | { type: "tool"; name: string; args: unknown };
-
-async function runTool(
-  name: string,
-  args: unknown,
-  signal: AbortSignal,
-): Promise<void> {
-  // A real implementation validates args before using them.
-  void name;
-  void args;
-  void signal;
-}
-
-async function handle(
-  input: Input,
-  signal: AbortSignal,
-  emit: (event: { type: "log"; message: string }) => void,
-): Promise<void> {
-  if (input.type === "message") {
-    emit({ type: "log", message: input.text });
-    return;
-  }
-
-  if (signal.aborted) return;
-  // Validate input.args before passing it to a tool.
-  await runTool(input.name, input.args, signal);
-}
-```
-
-Questions:
-
-1. Which field narrows `input`?
-2. Why is `input.text` unavailable in the tool branch?
-3. Which value is untrusted?
-4. What does the `AbortSignal` protect?
-5. Is `emit` called now or stored for later?
-6. What return type does `handle` have?
-
-Answers:
-
-1. `input.type` narrows the union.
-2. Only the message variant has `text`.
-3. `input.args` is `unknown` and needs validation before `runTool` trusts it.
-4. It lets the parent cancel before or during tool work; checking the flag alone
-   does not cancel an operation that is already running.
-5. `emit` is called immediately in this function, though a callback can also be stored.
-6. `Promise<void>` because it is an async function with no returned value.
-
-### R5. Type-checking a standalone extension
-
-Use this only when an extension lives outside the monorepo. An extension inside
-the monorepo uses the root workspace configuration; a standalone extension must
-install the published Pi packages and provide its own `tsconfig.json`.
-
-| Option | Meaning |
-|---|---|
-| `module` | how imports and exports are represented |
-| `moduleResolution` | how the checker finds imported files |
-| `strict` | enable the strongest useful checking defaults |
-| `skipLibCheck` | skip checking dependency declaration files |
-| `noEmit` | check without writing JavaScript |
-| `include` | which files belong to this project |
-
-Use this only when an extension lives outside the monorepo:
-
-```bash
-npm install --save-dev @earendil-works/pi-ai \
-  @earendil-works/pi-coding-agent typescript
-```
-
-```json
-{
-  "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "strict": true,
-    "skipLibCheck": true,
-    "noEmit": true
-  },
-  "include": ["src/**/*.ts"]
-}
-```
-
-Adjust `include` to your project layout, then run:
-
-```bash
-npx tsc --noEmit
-```
-
-Success means the command exits without reported errors; failure points to a
-file and line that needs attention. Runtime loading through `jiti` is separate
-from this check. A runtime that loads an extension successfully does not prove
-that the extension type-checks. If a package cannot be resolved, check the
-published package installation, module-resolution setting, and import spelling.
-
-## Closing
-
-You are ready for the architecture and extension chapters when you can:
-
-- read a module and identify runtime versus type-only imports
-- follow object shapes, unions, and exhaustive switches
-- recognize generics without treating `T` as a runtime value
-- treat JSON, model output, and tool arguments as untrusted until validated
-- follow Promise, stream, and `AbortSignal` ownership
-- recognize Pi's `defineTool`, `AgentEvent`, snapshots, and class lifecycle
-- make a small change and run the repository's type-checking workflow
-
-When a later chapter cites a type-heavy file, return to the relevant guided tour
-rather than trying to memorize every TypeScript feature at once.
-
-Your next practice step is:
-
-1. open one source-tour file
-2. trace one union, tool schema, callback, or signal
-3. make a documentation-only or test-only change and run the focused check
-
-The reference sections are for revisiting a term when it appears, not for
-memorizing every utility type before you start contributing.
+When reading Pi, follow the signal into the file, process, network, or provider
+operation. The owner creates or receives the `AbortController`; the operation
+must decide how to stop and clean up. The agent and tool chapters cover retry,
+timeouts, and parallel Promise behavior in their concrete contexts.
+
+## Pi workflow and source-reading checklist
+
+Pi uses an agent harness and a coding-agent application. The normal path crosses
+these packages:
+
+| Package | Responsibility | First source to inspect |
+|---|---|---|
+| `packages/tui` | reusable terminal rendering primitives | `src/index.ts`, `src/tui.ts` |
+| `packages/ai` | models, provider dispatch, and streaming contracts | `src/index.ts`, `src/types.ts` |
+| `packages/agent` | provider-independent loop, messages, and tools | `src/agent.ts`, `src/agent-loop.ts` |
+| `packages/coding-agent` | CLI, sessions, built-in tools, resources, extensions | `src/main.ts`, `src/core/sdk.ts` |
+
+For a change, use this order:
+
+1. classify the behavior by owner: TUI, AI/provider, generic agent, or
+   coding-agent application;
+2. find the declaration and its public export;
+3. find construction sites and call sites;
+4. identify literal tags, optional fields, and external data boundaries;
+5. follow callbacks, streams, signals, and cleanup to their owner;
+6. make the smallest change that preserves the contract;
+7. update union consumers when a variant changes;
+8. run the relevant check and inspect the diff.
+
+Continue with [architecture: packages, ownership, and entry points](#sec:architecture).
+Use [the workbook's guided source tour](17-typescript-foundations-workbook.qmd#guided-source-tour-a-custom-tool)
+if you want a slower exercise before opening the repository.
+
+## Closing checkpoint
+
+You are ready for architecture when you can explain: which package owns a
+behavior, which literal selects a union branch, which callback runs later, why
+an external value is `unknown`, where TypeBox performs runtime validation, and
+which signal or cleanup method owns cancellation.

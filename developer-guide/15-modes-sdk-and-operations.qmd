@@ -2,7 +2,9 @@
 
 The `pi` binary is one host for the coding-agent runtime. The same session
 construction and event model can also serve print, JSON, RPC, and programmatic
-SDK use. Understanding the modes prevents terminal assumptions from leaking
+SDK use. Read [Sessions](#sec:sessions) for persistence and [Extensions](#sec:extensions)
+for tool definitions before embedding. Here, “operations” means the host-level
+concerns around protocols, stdout, cleanup, security, and deployment. Understanding the modes prevents terminal assumptions from leaking
 into automation and helps you select an integration surface deliberately.
 
 Start with `packages/coding-agent/src/main.ts`,
@@ -99,7 +101,8 @@ assistant text or RPC's persistent command channel. See also
 
 ### Session header on the JSON stream
 
-The first JSONL object is the same session-file header that begins a persisted
+**JSONL** means newline-delimited JSON: each JSON object is serialized on one
+line. The first JSONL object is the same session-file header that begins a persisted
 session, when one is available. In source it is `SessionHeader` from
 `packages/coding-agent/src/core/session-manager.ts`: metadata immediately written
 by `runPrintMode` before subscribed events, not a conversation entry.
@@ -129,9 +132,10 @@ corrupt the JSONL stream consumed by automation. Prefer documented event/UI
 mechanisms, or emit controlled diagnostics on stderr when that is acceptable for
 the embedding host.
 
-The same caution applies to provider payload tracing. A raw JSON dump may
-contain private context and may interfere with automation output. Build a
-sanitized, opt-in diagnostic command instead.
+Provider payload tracing has a second, separate risk: raw payloads may contain
+private context, credentials, or user instructions even when they are written
+on stderr. Build a sanitized, opt-in diagnostic command instead of conflating
+this privacy risk with stdout protocol corruption.
 
 ## RPC mode as a persistent process boundary
 
@@ -152,6 +156,11 @@ agent implementation. The full command and event catalog is
 `packages/coding-agent/docs/rpc.md`.
 
 ### Framing and object shapes
+
+> **Protocol warning:** JSONL records are separated only by LF (`\n`). Unicode
+> `U+2028` and `U+2029` can appear inside JSON strings. Node's `readline` splits
+> on those characters too, so it is not sufficient for a protocol-compliant
+> JSONL client.
 
 - Transport is strict JSONL over stdin/stdout.
 - The only record delimiter is LF (`\n`). Clients may strip a trailing `\r` so
@@ -206,6 +215,8 @@ session/event channels, or stderr for diagnostics.
 
 `packages/ai` is the lower-level, provider-neutral layer for model definitions,
 authentication support, request serialization, and normalized streaming events.
+For example, a new provider adapter belongs here; a `before_agent_start` hook
+that adds a system-prompt prefix stays in `packages/coding-agent`.
 It does not own session persistence, extension loading, built-in tools,
 compaction/retry policy, system-prompt assembly, or any of the run-mode hosts
 described above.
@@ -254,8 +265,32 @@ Use the CLI/RPC surface when a separate process boundary is preferable.
 
 `createAgentSession` accepts custom tool definitions alongside built-in-tool
 selection. These tools enter the same registry/extension wrapping flow as an
-extension-registered tool. Give them a clear source identity, schema, durable
-details shape, and prompt metadata where appropriate.
+extension-registered tool. A minimal host-owned tool looks like:
+
+This example imports `Type` from `@earendil-works/pi-ai`, whose public root
+entry point re-exports `Type` and `Static`. That is convenient when the host
+already depends on `pi-ai`. Extension documentation instead imports `Type`
+from the direct `typebox` package because the extension declares that schema
+dependency itself. Both are valid choices; `@earendil-works/pi-coding-agent`
+does **not** re-export TypeBox.
+
+```ts
+import { Type } from "@earendil-works/pi-ai";
+
+const customTool = {
+  name: "lookup",
+  description: "Look up one application record.",
+  parameters: Type.Object({ id: Type.String() }),
+  execute: async (_id, params, signal) => {
+    // validate permissions and forward signal to I/O
+    return { content: [{ type: "text", text: params.id }] };
+  },
+};
+```
+
+Give real tools a clear source identity, schema, durable details shape, and
+prompt metadata where appropriate. See [Extensions](#sec:extensions) for the
+full `defineTool` contract.
 
 An SDK host can use this for application-specific operations without requiring
 an extension file on disk. The tradeoff is scope: a tool supplied by one host
@@ -276,9 +311,11 @@ pre-serialize provider-specific image payloads in a generic SDK host.
 ## Operational safety boundaries
 
 Pi runs with the operating-system permissions of its process. It does not add a
-built-in filesystem/process/network permission sandbox. Treat containerization
-or other OS-level sandboxing as the recommended way to create stronger
-isolation when automation or untrusted tools require it. That recommendation
+built-in filesystem/process/network permission sandbox. **Containerization**
+means running Pi inside Docker or a similar OS-level sandbox so filesystem,
+network, and process access are limited to the container's scope. Treat it or
+other OS-level sandboxing as the recommended way to create stronger isolation
+when automation or untrusted tools require it. That recommendation
 matches the root `README.md` containerization guidance and
 `packages/coding-agent/docs/containerization.md`.
 
@@ -293,20 +330,24 @@ Use OS/container boundaries for security enforcement. Use extension tool gates
 for workflow policy and user confirmation. Do not confuse a model instruction
 or a theme with a security control.
 
-## Operational observability
+## Observability responsibilities for hosts
 
-### Behavior provided by Pi
+### Pi-provided surfaces
 
-Startup diagnostics are collected during service/session construction and
-reported by the application layer. Extension load failures are startup errors
-and include a hint to retry without extensions. Settings and model load issues
-surface as diagnostics, while the output guard protects protocol output from
-ordinary writes. Timing instrumentation also exists, including optional startup
-timing output.
+Pi provides runtime surfaces that a host can observe: startup and resource-load
+diagnostics, `AgentSession` events such as agent/turn/tool lifecycle and
+retry/compaction outcomes, provider response status/headers when the transport
+exposes them, and protocol output guards. These are behavior and diagnostics,
+not a promise of a complete tracing or metrics backend. Print and JSON both
+call the single-run `runPrintMode` host and exit after their prompt, so their
+observations naturally end with that run. RPC uses a persistent host to accept
+further commands and stream later events, so an RPC client must correlate
+observations across its longer-lived process and request stream.
 
-### Host-level recommendations
+### Host telemetry recommendations
 
-For a production-like integration, capture:
+For a production-like integration, capture only the fields needed to diagnose
+an incident:
 
 - selected mode and cwd;
 - selected model/provider/API type, without credentials;
@@ -316,9 +357,10 @@ For a production-like integration, capture:
 - provider status metadata when safely available;
 - cancellation/retry/compaction decisions.
 
-This is integration guidance rather than a claim that Pi emits every item as a
-ready-made telemetry record. Choose fields that make incidents diagnosable
-without collecting full user prompts.
+This list is host guidance, not a claim that Pi emits each item as a ready-made
+telemetry record. For correlation, a host may add a sanitized request ID (for
+example `X-Request-Id`) through `before_provider_headers`; never collect full
+prompts, raw provider payloads, credentials, or auth headers by default.
 
 ## Choosing an integration approach
 
