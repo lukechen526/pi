@@ -210,10 +210,11 @@ export default function register(pi: ExtensionAPI) {
 ```
 
 The tool definition uses `defineTool`, as does the repository's verified
-`packages/coding-agent/examples/extensions/hello.ts`. `Type.Object` is a
-runtime schema. `defineTool` derives the static type of `params`, and the agent
-loop validates AI-model-supplied arguments against that schema before calling
-`execute`.
+extension example:
+`packages/coding-agent/examples/extensions/hello.ts`.
+`Type.Object` is a runtime schema. `defineTool` derives the static type of
+`params`, and the agent loop validates AI-model-supplied arguments against that
+schema before calling `execute`.
 
 3. Start Pi in any project. The startup notification confirms discovery.
    Run `/hello-pi Ada` to exercise the command. Ask Pi to greet Ada with the

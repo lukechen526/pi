@@ -102,9 +102,14 @@ and registers hooks, tools, commands, or UI behavior. See [Extensions](#sec:exte
 
 **Extension command**
 
-: A slash command registered through the extension API, such as
-`pi.registerCommand("hello-pi", ...)`, which users invoke as `/hello-pi`. It is
-not a `!` user-shell command. See [Extensions](#sec:extensions) and [Built-in tools](#sec:tools).
+: A slash command registered through the extension API, such as:
+
+```text
+pi.registerCommand("hello-pi", ...)
+```
+
+Users invoke it as `/hello-pi`. It is not a `!` user-shell command. See
+[Extensions](#sec:extensions) and [Built-in tools](#sec:tools).
 
 **Extension context**
 

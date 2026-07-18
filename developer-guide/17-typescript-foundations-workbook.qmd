@@ -2188,11 +2188,21 @@ export type AgentEvent =
 	// Message lifecycle - emitted for user, assistant, and toolResult messages
 	| { type: "message_start"; message: AgentMessage }
 	// Only emitted for assistant messages during streaming
-	| { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
+	| {
+		type: "message_update";
+		message: AgentMessage;
+		assistantMessageEvent: AssistantMessageEvent;
+	  }
 	| { type: "message_end"; message: AgentMessage }
 	// Tool execution lifecycle
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
-	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean };
+	| {
+		type: "tool_execution_end";
+		toolCallId: string;
+		toolName: string;
+		result: any;
+		isError: boolean;
+	  };
 ```
 
 (One variant, `tool_execution_update`, is omitted here to keep the excerpt
@@ -2372,8 +2382,8 @@ function visitWithIndex(
 #### The real registration in Pi
 
 The synthetic `onSessionStart` above mirrors the real extension contract in
-`packages/coding-agent/src/core/extensions/types.ts` (line numbers shift as
-the file evolves). Condensed excerpt:
+`core/extensions/types.ts` within the coding-agent package (line numbers shift
+as the file evolves). Condensed excerpt:
 
 ```ts
 /** Fired when a session is started, loaded, or reloaded */

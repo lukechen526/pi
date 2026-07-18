@@ -154,9 +154,9 @@ starts `InteractiveMode`, RPC mode, or print mode. It is composition and
 application policy, not the agent loop.
 
 The major coding-agent subsystems are listed below. Every path in the
-**Important files** column is relative to `packages/coding-agent/src/`; for
-example, `core/sdk.ts` means
-`packages/coding-agent/src/core/sdk.ts`.
+**Important files** column is relative to the coding-agent source directory:
+`packages/coding-agent/src/`. For example, `core/sdk.ts` means the file at
+that relative path.
 
 | Subsystem | Responsibility | Important files |
 |---|---|---|

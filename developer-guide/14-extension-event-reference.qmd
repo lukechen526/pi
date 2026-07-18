@@ -4,8 +4,9 @@ This chapter is a practical reference for choosing extension hooks. Read
 [Extensions](#sec:extensions) first for registration and tool basics, [Built-in
 tools](#sec:tools) for tool lifecycle, [Models](#sec:models) for provider hooks,
 and [Run modes](#sec:modes) for mode-specific behavior. It does not replace the
-source types in `packages/coding-agent/src/core/extensions/types.ts` or the
-exhaustive `packages/coding-agent/docs/extensions.md`; use those when writing
+source types in the extension types file,
+`packages/coding-agent/src/core/extensions/types.ts`, or the exhaustive
+`packages/coding-agent/docs/extensions.md`; use those when writing
 code. Its goal is to make event choice, return value, context, and
 lifecycle safety explicit before implementation.
 

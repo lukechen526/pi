@@ -8,12 +8,11 @@ focus on the end-to-end path.
 
 It explains how event-driven transcript updates are requested, not terminal
 renderer layout or paint internals; for those, follow the `InteractiveMode`
-handlers into `packages/coding-agent/src/modes/interactive/components/` and
-`packages/tui`.
+handlers into the interactive components directory,
+`packages/coding-agent/src/modes/interactive/`, and then into
+`components/` or `packages/tui`.
 
-It is source-grounded in
-`packages/coding-agent/src/modes/interactive/interactive-mode.ts`,
-`packages/coding-agent/src/core/agent-session.ts`,
+It is source-grounded in the interactive mode and session files, plus
 `packages/agent/src/agent.ts`, `packages/agent/src/agent-loop.ts`, and the
 `packages/ai` dispatch layer.
 
@@ -210,7 +209,7 @@ assistant request the path is:
    API instance, or looks up the registered API provider by `model.api` and
    calls that provider's `streamSimple`.
 5. The adapter serializes the normalized context and returns a
-   provider-independent `AssistantMessageEventStream`. During that path:
+   provider-independent assistant event stream. During that path:
    - `onPayload` becomes extension `before_provider_request` and may replace
      the provider-specific payload after serialization.
    - `onResponse` becomes extension `after_provider_response` and observes HTTP

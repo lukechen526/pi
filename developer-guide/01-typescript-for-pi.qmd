@@ -124,7 +124,7 @@ Now introduce a mistake: change `user.name` to `user.nmae` and check again:
 
 ```text
 $ npx tsgo --noEmit hello.ts
-hello.ts:4:27 - error TS2339: Property 'nmae' does not exist on type 'User'. Did you mean 'name'?
+hello.ts:4:27 - error TS2339: Property 'nmae' does not exist on type 'User'.
 ```
 
 Read the diagnostic left to right: the file and position (`hello.ts`, line 4,

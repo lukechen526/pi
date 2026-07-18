@@ -15,10 +15,12 @@ coding-agent contributors should follow `InteractiveMode` and session events;
 TUI contributors should focus on terminal lifecycle, components, input, and
 differential rendering.
 
-Relevant files include `packages/tui/src/tui.ts`,
-`packages/tui/src/terminal.ts`, `packages/tui/src/keybindings.ts`,
-`packages/tui/src/autocomplete.ts`, and
-`packages/coding-agent/src/modes/interactive/interactive-mode.ts`.
+Relevant files include:
+
+- `packages/tui/src/tui.ts`, `packages/tui/src/terminal.ts`, and
+  `packages/tui/src/keybindings.ts`;
+- `packages/tui/src/autocomplete.ts`;
+- `packages/coding-agent/src/modes/interactive/interactive-mode.ts`.
 
 ## Vocabulary before rendering details
 

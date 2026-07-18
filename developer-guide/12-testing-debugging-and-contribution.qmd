@@ -9,9 +9,8 @@ validation path that exercises the behavior. A local state transition does not
 require a provider call.
 
 Repository-wide contribution rules live in `AGENTS.md`. Coding-agent-specific
-development and extension guidance lives in
-`packages/coding-agent/docs/development.md` and
-`packages/coding-agent/docs/extensions.md`. For runtime failure ownership and
+development and extension guidance lives in the coding-agent docs:
+`packages/coding-agent/docs/`. For runtime failure ownership and
 recovery behavior, see [Failure and recovery](#sec:failure).
 
 ## Three kinds of evidence
@@ -81,8 +80,8 @@ different failure surface than the behavior being tested.
 
 ## Your first faux-provider test
 
-This is a complete offline suite test. Copy it to
-`packages/coding-agent/test/suite/guide-faux-provider.test.ts`:
+This is a complete offline suite test. From the coding-agent package root, copy
+it into the test suite as `guide-faux-provider.test.ts`:
 
 ```ts
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
@@ -96,7 +95,9 @@ describe("guide faux-provider example", () => {
       harness.setResponses([fauxAssistantMessage("offline response")]);
       await harness.session.prompt("hello from the test");
 
-      expect(harness.session.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+      expect(
+        harness.session.messages.map((message) => message.role),
+      ).toEqual(["user", "assistant"]);
       expect(getMessageText(harness.session.messages[0])).toBe("hello from the test");
       expect(getMessageText(harness.session.messages[1])).toBe("offline response");
       expect(harness.eventsOfType("agent_end")).toHaveLength(1);
@@ -111,7 +112,8 @@ describe("guide faux-provider example", () => {
 Run it from `packages/coding-agent` (the package root):
 
 ```bash
-node ../../node_modules/vitest/dist/cli.js --run test/suite/guide-faux-provider.test.ts
+node ../../node_modules/vitest/dist/cli.js --run \
+  test/suite/guide-faux-provider.test.ts
 ```
 
 The stages are deliberate:
@@ -133,10 +135,11 @@ SDK shortcut.
 
 ### A compact regression pattern
 
-For an issue-specific regression, use
-`packages/coding-agent/test/suite/regressions/<issue>-<slug>.test.ts`, for
-example `regressions/3317-network-connection-lost-retry.test.ts`. Keep the test
-focused and assert the observable event, not only a private counter:
+For an issue-specific regression, use a file such as
+`test/suite/regressions/<issue>-<slug>.test.ts` from the coding-agent package
+root; for example, `regressions/3317-network-connection-lost-retry.test.ts`.
+Keep the test focused and assert the observable event, not only a private
+counter:
 
 ```ts
 harness.setResponses([
@@ -161,7 +164,7 @@ more actionable.
    implementation and a nearby test.
 3. Write the smallest focused failing test in the owning package. For coding
    agent behavior, prefer the faux-provider harness above; for an issue
-   regression use `test/suite/regressions/<issue>-<slug>.test.ts`.
+   regression, use a file under `test/suite/regressions/`.
 4. Make the smallest change that makes the test pass. Preserve public event
    and message contracts unless the change explicitly updates them.
 5. Run the targeted test from the package root with the actual Vitest command,
@@ -294,8 +297,9 @@ and do not reset, clean, stash, or check out unrelated work. `AGENTS.md` also
 prohibits commits unless the user asks.
 
 For generated model metadata, change the generator source rather than editing
-`packages/ai/src/models.generated.ts` by hand. That policy preserves the link
-between catalog data and its generation process.
+the generated file by hand:
+`packages/ai/src/models.generated.ts`.
+That policy preserves the link between catalog data and its generation process.
 
 ## Documentation as a tested interface
 
