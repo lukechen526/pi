@@ -5,7 +5,9 @@ short [Pi-oriented route](01-typescript-for-pi.qmd#sec:typescript). Start here
 if you know basic JavaScript and are new to TypeScript, or return to a linked
 section when a concept in the main route needs a slower explanation. If
 JavaScript is new to you, read a JavaScript primer first; this workbook assumes
-objects, branches, loops, callbacks, template strings, and Promises.
+objects, branches, loops, callbacks, template strings, and Promises. The
+[JavaScript survival kit](#javascript-survival-kit) refreshes the exact syntax
+the examples use, with links to full primers.
 
 The material below is preserved as a workbook: definitions, small examples,
 worked exercises, common mistakes, TypeBox practice, source-reading tours, and
@@ -14,10 +16,18 @@ language.
 
 ## How to use this workbook
 
+The workbook is organized into five parts plus a reference section. Part 1
+teaches everyday TypeScript types, Part 2 shows the Pi patterns built from
+them, Part 3 covers TypeBox, Part 4 collects recognition-only advanced
+patterns, and Part 5 applies the basics to real Pi source. The reference
+section at the end is there when you get stuck.
+
 Read the foundations in order if you are coming from JavaScript. Otherwise use
 the section links from chapter 01, do the checkpoints before reading answers,
 and return to [the main Pi route](01-typescript-for-pi.qmd#sec:typescript) when
-you are ready for architecture.
+you are ready for architecture. Checkpoint and exercise answers are collected
+in an "Answers" subsection at the end of each part, so you can attempt a
+question without seeing its answer.
 
 The examples assume Pi's strict, erasable-TypeScript posture. Compiler options
 can change inferred types and diagnostics: `strict` enables several checks, but
@@ -43,6 +53,141 @@ For each exercise, first predict the checker result, then predict runtime
 behavior where relevant, and finally explain which boundary supplies the
 information.
 
+## Working through the examples
+
+Every snippet in this workbook is small enough to try yourself. Use whichever
+of these three practice loops fits the moment.
+
+**Loop 1: the TypeScript Playground.** Open
+[the TypeScript Playground](https://www.typescriptlang.org/play), paste a
+snippet, and hover over names to see inferred types. The right pane shows the
+erased JavaScript, which makes type erasure visible.
+
+**Loop 2: a scratch file you run.** Create `scratch.ts` anywhere outside the
+Pi repository, paste a snippet, and run it with type stripping:
+
+```text
+$ node --experimental-strip-types scratch.ts
+status: running
+```
+
+**Loop 3: a scratch file you check.** Type stripping runs code without
+checking it. Ask the checker for a second opinion:
+
+```text
+$ npx tsgo --noEmit scratch.ts
+scratch.ts:2:7 - error TS2322: Type 'number' is not assignable to type 'string'.
+```
+
+One end-to-end example. Put this in `scratch.ts`:
+
+```ts
+const status: string = "running";
+console.log(`status: ${status}`);
+```
+
+The run loop prints `status: running`. Now change the value to `42` and keep
+the annotation. The run loop still prints `status: 42`, because stripping
+ignores the annotation; the check loop reports the `TS2322` error above. The
+two loops answer different questions, and you need both.
+
+## JavaScript survival kit
+
+This workbook assumes JavaScript, but the syntax below appears so often in Pi
+that a sixty-second refresher pays for itself. Each item shows the pattern and
+says what it does.
+
+**Arrow functions** are short function values, common as callbacks:
+
+```ts
+const upper = (name: string) => name.toUpperCase();
+```
+
+`upper` is a function that takes one string and returns one string; there is
+no `function` keyword and no `this` of its own.
+
+**Destructuring** pulls properties or elements into local variables:
+
+```ts
+const { name, age = 0 } = user;   // object: name and age, age defaults to 0
+const [first, second] = names;    // array: first two elements
+```
+
+**Spread and rest** use the same `...` syntax in two directions:
+
+```ts
+const copy = { ...user, active: true };  // spread: copy fields, override one
+function log(...args: string[]): void {} // rest: gather arguments into array
+```
+
+Spread expands a value into a new object, array, or call; rest gathers the
+remaining values into one array.
+
+**Template literals** build strings with backticks and `${...}`:
+
+```ts
+const label = `${user.name}: ${count} files`;
+```
+
+**Array methods** do most of Pi's data work. `map` transforms every element,
+`filter` keeps matching elements, `find` returns the first match or
+`undefined`, and `some`/`every` answer boolean questions:
+
+```ts
+const lengths = names.map((n) => n.length);
+const long = names.filter((n) => n.length > 3);
+const ada = names.find((n) => n.startsWith("A"));   // string | undefined
+const anyReady = states.some((s) => s === "ready"); // boolean
+```
+
+`reduce` folds an array into one value; you will recognize it in Pi, but a
+loop or `map`/`filter` is usually clearer when you write new code.
+
+**`Map` and `Set`** are the keyed and unique-value collections:
+
+```ts
+const counts = new Map<string, number>();
+counts.set("read", 3);
+counts.get("read");     // 3, or undefined when absent
+const seen = new Set<string>();
+seen.add("read");
+seen.has("read");       // true
+```
+
+**`Object.entries`, `Object.keys`, and `Object.values`** turn plain objects
+into arrays you can iterate:
+
+```ts
+for (const [key, value] of Object.entries(config)) {
+  console.log(key, value);
+}
+```
+
+**Logical assignment** operators assign only when a condition holds:
+
+```ts
+counts.set("read", (counts.get("read") ?? 0) + 1);
+options.retries ??= 3;  // assign 3 only if retries is null or undefined
+```
+
+`??=` fills in missing values without overwriting meaningful ones; `||=` and
+`&&=` are the rarer siblings.
+
+**`structuredClone`** deep-copies a plain-data value:
+
+```ts
+const snapshot = structuredClone(state);
+```
+
+Unlike `{ ...state }`, nested objects and arrays are copied too, so later
+mutations do not leak into the snapshot.
+
+For a full primer, start with the
+[MDN JavaScript Guide](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide)
+and use the
+[MDN JavaScript reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference)
+when you need exact method behavior.
+
 ## What TypeScript checks—and what it erases
 
 TypeScript is a **static type checker**: it analyzes a program before the
@@ -67,6 +212,21 @@ behavior. A loader such as `tsx` or `jiti` can execute a file without proving
 that it passes the repository's type check. Conversely, a successful type check
 cannot prove that a network response has the shape your code expects.
 
+The two tracks run at different times, which is why each answers different
+questions:
+
+```{mermaid}
+%%| label: fig-static-vs-runtime
+%%| fig-cap: "Compile time checks and erases types; runtime executes values."
+flowchart LR
+  subgraph compile["Compile time"]
+    A[Write .ts] --> B[Type-check] --> C[Erase types] --> D[JavaScript]
+  end
+  subgraph run["Runtime"]
+    D --> E[Execute] --> F[Values and JSON arrive]
+  end
+```
+
 A small configuration controls how much evidence the checker requires:
 
 | Option | Main effect in this workbook |
@@ -85,14 +245,10 @@ to interpret their results.
 **Checkpoint:** Which of these facts can only be established at runtime: that a
 value is a string, that a property name is spelled correctly, or that a JSON
 response has the expected shape? What does type erasure mean? Which option
-changes the static result of an unchecked array access?
+changes the static result of an unchecked array access? (answer: [Part 1
+answers](#answers-part-1))
 
-**Answer:** A checker can catch a misspelled property in checked source, but it
-cannot establish the shape of later JSON without runtime validation. Type
-syntax is removed or transformed before JavaScript runs. `noUncheckedIndexedAccess`
-adds `undefined` to the static result of an unchecked indexed access.
-
-## Everyday TypeScript fundamentals
+## Part 1 — Everyday TypeScript fundamentals {#everyday-typescript-fundamentals}
 
 The sections in this part intentionally follow the beginner progression used
 by the TypeScript handbook: common values first, then functions and object
@@ -220,6 +376,7 @@ values before trying to understand the larger type.
 `["a", "b"]`? What can `messages[99]` return at runtime? Under ordinary
 `strict` checking, what may the checker report for that lookup, and what changes
 when `noUncheckedIndexedAccess` is enabled? Why can `any` hide a bug?
+(answer: [Part 1 answers](#answers-part-1))
 
 **Try it:** Before reading the answers, predict the checker's type for each
 value:
@@ -230,9 +387,7 @@ const fixedStatus = "idle";
 const values = [1, 2, 3];
 ```
 
-`changingStatus` is generally `string`, `fixedStatus` is the literal
-`"idle"`, and `values` is `number[]`. The reason for the difference between the
-first two values is explained fully in the literal-types section.
+(answer: [Part 1 answers](#answers-part-1))
 
 ### Annotations and inference
 
@@ -309,7 +464,8 @@ checker how its parameters will be called.
 
 **Checkpoint:** Which type is inferred for `greet`'s return value? Why does the
 `forEach` callback not need a parameter annotation? When would an explicit
-return annotation make the contract clearer?
+return annotation make the contract clearer? (answer: [Part 1
+answers](#answers-part-1))
 
 **Try it:** Remove the annotation from this callback and read the error that
 appears when the callback uses a string-only method:
@@ -321,10 +477,7 @@ counts.map((count) => count.toFixed(2));
 // count is inferred as number from the array.
 ```
 
-The callback parameter is inferred from the array element type. If you instead
-write `const counts: unknown[]`, the callback cannot call `toFixed` until you
-narrow each item. Context provides useful information, but it cannot invent
-facts that the surrounding value does not have.
+(answer: [Part 1 answers](#answers-part-1))
 
 ### Functions and common parameter forms
 
@@ -460,6 +613,7 @@ the basic function idea is the same.
 
 **Checkpoint:** Which parameter forms allow omission? Which one supplies a
 runtime fallback? What does `Promise<string>` describe? What does `void` mean?
+(answer: [Part 1 answers](#answers-part-1))
 
 **Try it:** Compare omission with an explicit `undefined` value:
 
@@ -473,9 +627,7 @@ label(undefined);
 label("status");
 ```
 
-The first two calls both use the fallback. A required parameter does not allow
-omission merely because its implementation could handle it; the function
-signature communicates what callers are allowed to pass.
+(answer: [Part 1 answers](#answers-part-1))
 
 ### Object types and optional properties
 
@@ -680,8 +832,8 @@ not change the positions.
 **Checkpoint:** What is the difference between an optional property and
 optional chaining? What happens to `0` with `||` and `??`? Why does the checker
 require a check before calling `toUpperCase()` on `user.last`? What runtime
-protection does `readonly` provide? None. Which type describes an open-ended
-string-keyed object?
+protection does `readonly` provide? Which type describes an open-ended
+string-keyed object? (answer: [Part 1 answers](#answers-part-1))
 
 ### Union types and basic narrowing
 
@@ -713,7 +865,17 @@ function uppercaseId(id: number | string): string {
 ```
 
 The `typeof` check is evidence. Inside the first branch, `id` is known to be a
-string. In the second branch, it is known to be a number.
+string. In the second branch, it is known to be a number. Each check shrinks
+the union for the code it guards:
+
+```{mermaid}
+%%| label: fig-narrowing
+%%| fig-cap: "Narrowing shrinks a union as checks provide evidence."
+flowchart TD
+  A["id: number | string"] --> B{"typeof id === 'string'?"}
+  B -->|yes| C["id: string"]
+  B -->|no| D["id: number"]
+```
 
 #### Other everyday narrowing checks
 
@@ -794,6 +956,7 @@ Read the union definition first, then find the `if` or `switch` that narrows it.
 
 **Checkpoint:** Why is `id.toUpperCase()` invalid before the `typeof` check? What
 does `Array.isArray` prove? Which properties can be used before narrowing?
+(answer: [Part 1 answers](#answers-part-1))
 
 **Try it:** Identify the common operation before narrowing:
 
@@ -803,9 +966,7 @@ function preview(value: string | number[]): string | number[] {
 }
 ```
 
-Both strings and arrays have `slice`, so the call is safe. The return type still
-contains both possibilities because the function did not decide which member
-it received.
+(answer: [Part 1 answers](#answers-part-1))
 
 ### Type aliases and interfaces
 
@@ -916,7 +1077,8 @@ is being silenced instead of the value being made safe.
 makes them safe. For external data, prefer `unknown` plus a guard or TypeBox.
 
 **Checkpoint:** Which example changes the runtime value? Which example checks
-the runtime value? What does `as` change?
+the runtime value? What does `as` change? (answer: [Part 1
+answers](#answers-part-1))
 
 **Try it:** Write down what each variable contains at runtime:
 
@@ -926,9 +1088,7 @@ const claimed = source as string;
 const converted = String(source);
 ```
 
-Both `source` and `claimed` contain the number `42`. Only `converted` contains
-the string `"42"`. The assertion changes what the checker permits; it does not
-perform the conversion.
+(answer: [Part 1 answers](#answers-part-1))
 
 ### Literal types and literal inference
 
@@ -1132,7 +1292,8 @@ does `!` provide? None: it only changes the checker's view.
 
 ### Worked example: a small status dashboard
 
-The following example combines only the concepts from Part 1. Read it in
+The following example combines only the concepts from
+[Part 1](#everyday-typescript-fundamentals). Read it in
 small steps rather than trying to understand the final version immediately.
 
 Start with primitive values:
@@ -1230,7 +1391,7 @@ read the Pi-specific sections.
 ### Practice lab
 
 These exercises use only the concepts from Part 1. Try each question before
-reading its answer.
+reading its answer in the [Part 1 answers](#answers-part-1).
 
 #### Exercise 1: primitives and arrays
 
@@ -1247,13 +1408,6 @@ Answer these questions:
 3. What is the type of `ready`?
 4. What could `attempts[10]` be?
 
-**Answer:** `title` is inferred as the literal type `"Build"` because it is a
-`const` primitive. `attempts` is `number[]`. `ready` is the literal type
-`false`. Indexing may produce `undefined` when no element exists at runtime;
-with `noUncheckedIndexedAccess`, the checker also includes `undefined` in the
-indexed result. Without that option, ordinary `strict` checking does not by
-itself guarantee that the static result includes `undefined`.
-
 #### Exercise 2: annotation or inference
 
 ```ts
@@ -1266,10 +1420,6 @@ names.map((name) => name.length);
 
 Which values are inferred as broad types? Which callback parameter receives a
 contextual type?
-
-**Answer:** `mode` is generally `string` because it can be reassigned.
-`fixedMode` preserves the literal `"read"`. `name` is inferred as `string`
-from the array passed to `map`.
 
 #### Exercise 3: optional property and fallback
 
@@ -1286,11 +1436,6 @@ function retryCount(options: Options): number {
 What happens for `{}`, `{ retries: undefined }`, `{ retries: 0 }`, and
 `{ retries: null }`?
 
-**Answer:** The first two use `3`. The third returns `0`, because zero is a
-meaningful number and `??` preserves it. The last call is rejected by the type
-checker because `null` is not assignable to `number | undefined` unless the
-type explicitly includes `null`.
-
 #### Exercise 4: union narrowing
 
 ```ts
@@ -1303,9 +1448,6 @@ function sizeOf(value: string | string[]): number {
 Why is `.length` available in both branches, and why is `value.join` available
 only in the first branch?
 
-**Answer:** Both strings and arrays have `length`. Only arrays have `join`, so
-the `Array.isArray` check is needed before using it.
-
 #### Exercise 5: structural typing
 
 ```ts
@@ -1317,10 +1459,6 @@ const coordinates: Coordinates = point;
 Why is the assignment allowed? What happens if the extra property appears in a
 fresh object literal assigned directly to `Coordinates`?
 
-**Answer:** The variable has the required `x` and `y` fields, so structural
-typing accepts it. A fresh object literal receives an extra-property check and
-may reject an unexpected `label` field in that direct assignment.
-
 #### Exercise 6: assertion versus validation
 
 ```ts
@@ -1329,10 +1467,6 @@ const claimed = input as { count: number };
 ```
 
 Can `claimed.count + 1` be trusted? What would a safe implementation do first?
-
-**Answer:** No. The assertion does not change the runtime string `"many"`.
-A safe implementation checks that the input is an object and that `count` is a
-number, or validates it with a runtime schema.
 
 #### Exercise 7: readonly tuples
 
@@ -1355,10 +1489,6 @@ explanation appears later in [Types from existing declarations](#types-from-exis
 What is the type of `modes`? Which values can `Mode` contain? Can code call
 `modes.push("preview")`? What does this example protect at runtime?
 
-**Answer:** `modes` is `readonly ["read", "write"]`, and `Mode` is
-`"read" | "write"`. `push` is unavailable through the readonly type. Nothing
-freezes the runtime array; another mutable reference could still change it.
-
 #### Exercise 8: `satisfies` versus assertion
 
 **Focus:** predict checker diagnostics and runtime behavior at a validation
@@ -1375,11 +1505,6 @@ const limits = {
 
 Does `satisfies` validate a value received from JSON? Does it change the
 runtime object? What kind of typo would the checker catch in this example?
-
-**Answer:** No. `satisfies` checks this source expression at compile time and
-has no runtime effect. It would catch a missing required key, an unexpected key
-in this object literal, or a non-number value, but it does not inspect later
-JSON data.
 
 #### Exercise 9: exhaustive narrowing
 
@@ -1406,11 +1531,6 @@ function outcomeText(outcome: Outcome): string {
 
 Why does the `default` branch accept `outcome` as `never`? What happens if a
 `{ type: "cancelled" }` variant is added without adding a new case?
-
-**Answer:** `assertNever` accepts only `never`, so when every union member is
-handled the remaining type is `never` and the call is valid. Adding `cancelled`
-makes the `assertNever` call fail the type check until the new variant is
-handled.
 
 ### Common beginner mistakes in Everyday Types
 
@@ -1585,7 +1705,8 @@ plus a guard or runtime schema; neither assertion nor `satisfies` validates JSON
 
 ### Read one complete function line by line
 
-Use this small function as a final Part 1 reading exercise:
+Use this small function as a final
+[Part 1](#everyday-typescript-fundamentals) reading exercise:
 
 ```ts
 type DisplayOptions = {
@@ -1704,10 +1825,122 @@ The `typeof` check selects the string branch. The remaining branch is the
 object shape. This “identify the value, then find the check” habit is more
 useful than memorizing the syntax in isolation.
 
-## Pi patterns built from everyday types
+### Answers {#answers-part-1}
+
+**What TypeScript checks—and what it erases, Checkpoint.** A checker can catch
+a misspelled property in checked source, but it cannot establish the shape of
+later JSON without runtime validation. Type syntax is removed or transformed
+before JavaScript runs. `noUncheckedIndexedAccess` adds `undefined` to the
+static result of an unchecked indexed access.
+
+**Primitives and arrays, Checkpoint.** `"ready"` is `string` (the literal
+`"ready"` for a `const`), `17` is `number`, `false` is `boolean`, and
+`["a", "b"]` is `string[]`. `messages[99]` can return `undefined` at runtime.
+Under ordinary `strict` checking the checker may still report the lookup as
+`string`; `noUncheckedIndexedAccess` adds `undefined` to the static result.
+`any` disables checking, so a misspelled or missing property compiles and then
+fails at runtime.
+
+**Primitives and arrays, Try it.** `changingStatus` is generally `string`,
+`fixedStatus` is the literal `"idle"`, and `values` is `number[]`. The reason
+for the difference between the first two values is explained fully in the
+literal-types section.
+
+**Annotations and inference, Checkpoint.** `greet`'s return value is inferred
+as `string`. The `forEach` callback needs no annotation because the array's
+element type provides it through contextual typing. An explicit return
+annotation helps when the return value is a public contract that a future edit
+must not silently change.
+
+**Annotations and inference, Try it.** The callback parameter is inferred from
+the array element type. If you instead write `const counts: unknown[]`, the
+callback cannot call `toFixed` until you narrow each item. Context provides
+useful information, but it cannot invent facts that the surrounding value does
+not have.
+
+**Functions and common parameter forms, Checkpoint.** Optional parameters and
+default parameters allow omission; the default parameter supplies a runtime
+fallback. `Promise<string>` describes a result that will eventually be a
+string. `void` means the caller should not expect a useful return value.
+
+**Functions and common parameter forms, Try it.** The first two calls both use
+the fallback. A required parameter does not allow omission merely because its
+implementation could handle it; the function signature communicates what
+callers are allowed to pass.
+
+**Object types and optional properties, Checkpoint.** An optional property
+(`last?: string`) describes a key that may be absent; optional chaining
+(`user.last?.`) safely accesses a value that may be missing. `||` turns `0`
+into the fallback while `??` keeps it. `user.last` may be `undefined`, so the
+checker requires evidence before a string method is called. `readonly`
+provides no runtime protection: none. An index signature such as
+`{ [key: string]: unknown }` describes an open-ended string-keyed object.
+
+**Union types and basic narrowing, Checkpoint.** Before narrowing, only
+operations valid for every union member are allowed, and `number` has no
+`toUpperCase`. `Array.isArray` proves the value is an array in the true
+branch. Properties shared by every member, such as `length` on
+`string | number[]`, can be used before narrowing.
+
+**Union types and basic narrowing, Try it.** Both strings and arrays have
+`slice`, so the call is safe. The return type still contains both
+possibilities because the function did not decide which member it received.
+
+**Type assertions, Checkpoint.** `String(value)` changes the runtime value;
+the ternary with `typeof` checks the runtime value; `as` changes only what the
+checker permits.
+
+**Type assertions, Try it.** Both `source` and `claimed` contain the number
+`42`. Only `converted` contains the string `"42"`. The assertion changes what
+the checker permits; it does not perform the conversion.
+
+**Exercise 1.** `title` is inferred as the literal type `"Build"` because it
+is a `const` primitive. `attempts` is `number[]`. `ready` is the literal type
+`false`. Indexing may produce `undefined` when no element exists at runtime;
+with `noUncheckedIndexedAccess`, the checker also includes `undefined` in the
+indexed result. Without that option, ordinary `strict` checking does not by
+itself guarantee that the static result includes `undefined`.
+
+**Exercise 2.** `mode` is generally `string` because it can be reassigned.
+`fixedMode` preserves the literal `"read"`. `name` is inferred as `string`
+from the array passed to `map`.
+
+**Exercise 3.** The first two use `3`. The third returns `0`, because zero is
+a meaningful number and `??` preserves it. The last call is rejected by the
+type checker because `null` is not assignable to `number | undefined` unless
+the type explicitly includes `null`.
+
+**Exercise 4.** Both strings and arrays have `length`. Only arrays have
+`join`, so the `Array.isArray` check is needed before using it.
+
+**Exercise 5.** The variable has the required `x` and `y` fields, so
+structural typing accepts it. A fresh object literal receives an
+extra-property check and may reject an unexpected `label` field in that direct
+assignment.
+
+**Exercise 6.** No. The assertion does not change the runtime string `"many"`.
+A safe implementation checks that the input is an object and that `count` is a
+number, or validates it with a runtime schema.
+
+**Exercise 7.** `modes` is `readonly ["read", "write"]`, and `Mode` is
+`"read" | "write"`. `push` is unavailable through the readonly type. Nothing
+freezes the runtime array; another mutable reference could still change it.
+
+**Exercise 8.** No. `satisfies` checks this source expression at compile time
+and has no runtime effect. It would catch a missing required key, an
+unexpected key in this object literal, or a non-number value, but it does not
+inspect later JSON data.
+
+**Exercise 9.** `assertNever` accepts only `never`, so when every union member
+is handled the remaining type is `never` and the call is valid. Adding
+`cancelled` makes the `assertNever` call fail the type check until the new
+variant is handled.
+
+## Part 2 — Pi patterns built from everyday types {#pi-patterns-built-from-everyday-types}
 
 You now have the everyday TypeScript foundation. The next sections add only the
-patterns needed to read Pi's source. They are not prerequisites for Part 1.
+patterns needed to read Pi's source. They are not prerequisites for
+[Part 1](#everyday-typescript-fundamentals).
 
 ### Modules and imports
 
@@ -1822,6 +2055,49 @@ function eventLabelWithSwitch(event: StatusEvent): string {
 Pi uses this pattern for `AgentEvent`, message roles, content blocks, and
 session entries. Find the literal `type` or `role` values first, then read the
 branch that handles the value you care about.
+
+Here is the real `AgentEvent` union, excerpted from
+`packages/agent/src/types.ts` (around line 415; line numbers shift as the
+repository changes, so search for `export type AgentEvent`):
+
+```ts
+export type AgentEvent =
+	// Agent lifecycle
+	| { type: "agent_start" }
+	| { type: "agent_end"; messages: AgentMessage[] }
+	// Turn lifecycle - a turn is one assistant response + any tool calls/results
+	| { type: "turn_start" }
+	| { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[] }
+	// Message lifecycle - emitted for user, assistant, and toolResult messages
+	| { type: "message_start"; message: AgentMessage }
+	// Only emitted for assistant messages during streaming
+	| { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
+	| { type: "message_end"; message: AgentMessage }
+	// Tool execution lifecycle
+	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
+	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean };
+```
+
+(One variant, `tool_execution_update`, is omitted here to keep the excerpt
+short.) Reading notes:
+
+1. Every member shares the literal `type` property, so `event.type` is the
+   discriminant and every consumer can narrow on it.
+2. Variants carry different payloads: `agent_end` has `messages`, while
+   `agent_start` has nothing extra. Accessing `event.messages` is only legal
+   after narrowing to a member that has it.
+3. Comments group the variants into lifecycles (agent, turn, message, tool),
+   which is the reading order a newcomer should follow.
+4. Some payloads use `any` (for example `args` and `result`). That is a
+   deliberate escape hatch at a UI boundary, not a license to copy the habit.
+5. The payload types (`AgentMessage`, `ToolResultMessage`) are imported names;
+   follow them with go-to-definition when you need their shapes.
+
+For a consumer, open `packages/agent/src/agent-loop.ts` and look at the
+`emit({ type: "agent_start" })` calls and the streaming loop that matches on
+`event.type` before emitting `message_start`/`message_update`/`message_end`.
+The `emit` calls construct the union members; the UI subscribers narrow them.
+The guided tour in [Part 5](#apply-the-basics-to-pi) builds on this excerpt.
 
 #### User-defined predicates and exhaustive unions
 
@@ -2041,8 +2317,119 @@ The manual guard builds a new trusted value from fields that were checked. The
 TypeBox section shows how to avoid repeating those checks when the shape is
 shared or exposed as a tool contract.
 
+#### JSONL: line-delimited external data
+
+Pi session files are JSONL: one JSON value per line, not one JSON document.
+Parse each line separately so one bad line does not destroy the whole file:
+
+```ts
+for (const line of text.split("\n")) {
+  if (line.trim() === "") continue;
+
+  let entry: unknown;
+  try {
+    entry = JSON.parse(line);
+  } catch {
+    continue; // or record the bad line number and report it
+  }
+
+  if (!Value.Check(SessionEntrySchema, entry)) continue;
+  // entry is now trusted
+}
+```
+
+`JSON.parse` returns `unknown` (through the `entry` annotation), so every line
+goes through the same guard-or-schema step as any other external value. The
+loop chooses whether to skip or report malformed lines; the one thing it never
+does is trust them.
+
+#### Node globals to recognize
+
+Pi runs on Node, so its source uses a few Node-specific names that are not
+part of the JavaScript language. Recognition only: `process.env` reads
+environment variables such as API keys; imports prefixed with `node:` such as
+`node:fs` and `node:path` are Node built-in modules (the prefix makes "this is
+a built-in, not a package" explicit); `Buffer` is Node's byte container, used
+when data is not text yet. Look these up in the Node documentation when you
+need their exact behavior.
+
 **Checkpoint:** Which value is untrusted? What does `as` do? Why is the object
 returned by `readUser` safer than the original parsed value?
+
+### Errors and exceptions {#errors-and-exceptions}
+
+Exceptions are the other way operations fail: instead of returning a value,
+code throws. `try`/`catch` intercepts a thrown value:
+
+```ts
+function readConfig(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+```
+
+The `catch` variable is `unknown` under Pi's strict checking, because any
+value can be thrown. Narrow it before reading properties; `instanceof Error`
+is the standard check:
+
+```ts
+try {
+  await loadSession(id);
+} catch (error) {
+  if (error instanceof Error) {
+    console.error(error.message);
+  } else {
+    console.error(String(error));
+  }
+}
+```
+
+Define a custom error when callers need to distinguish failure kinds. Extend
+`Error`, set `name`, and add the fields a handler will read:
+
+```ts
+class ConfigError extends Error {
+  readonly path: string;
+
+  constructor(path: string, message: string) {
+    super(message);
+    this.name = "ConfigError";
+    this.path = path;
+  }
+}
+```
+
+`instanceof ConfigError` then narrows a caught value enough to read `path`.
+When re-throwing a failure you caught, pass `cause` so the original error is
+not lost:
+
+```ts
+try {
+  return parseSession(text);
+} catch (error) {
+  throw new Error(`Could not load session ${id}`, { cause: error });
+}
+```
+
+Exceptions and the `Result`-style unions from the discriminated-unions
+section solve the same problem at different distances. Pi tools throw on
+failure and let the runtime convert the exception into a tool result; Pi's
+own control flow prefers returned unions such as `{ ok: true } | { ok: false }`
+where a caller must narrow. When you read Pi code, ask which convention the
+function chose: a thrown exception crosses layers, a returned union is
+handled by the immediate caller. The
+[failure and recovery reference](16-failure-and-recovery-reference.qmd) covers
+the runtime side: retries, cancellation during failure, and user-facing
+errors.
+
+**Checkpoint:** Why is the `catch` variable typed `unknown` instead of
+`Error`? What does `instanceof Error` prove about a caught value? What does
+`cause` preserve when you wrap an error? When does Pi prefer a returned
+`Result`-style union over a thrown exception? (answer: [Part 2
+answers](#answers-part-2))
 
 ### Generics and utility types
 
@@ -2110,22 +2497,37 @@ schema's static value type. Neither operation validates data by itself.
 #### Selected utility types
 
 Utility types transform compile-time descriptions. They do not mutate, copy,
-freeze, validate, or convert runtime values:
+freeze, validate, or convert runtime values. Three worked examples cover the
+shapes you will meet most; the
+[reference table](#utility-types-to-recognize) lists the rest.
 
-| Type | Meaning |
-|---|---|
-| `Partial<T>` | all properties optional |
-| `Required<T>` | all properties required |
-| `Readonly<T>` | top-level properties readonly |
-| `Pick<T, K>` | keep selected keys |
-| `Omit<T, K>` | remove selected keys |
-| `Record<K, V>` | map keys to values |
-| `ReturnType<typeof fn>` | function result type |
-| `Parameters<typeof fn>` | function argument tuple |
-| `Awaited<T>` | unwrap the eventual value of a Promise |
-| `Exclude<T, U>` | remove union members assignable to `U` |
-| `Extract<T, U>` | keep union members assignable to `U` |
-| `NonNullable<T>` | remove `null` and `undefined` |
+`Partial<T>` makes every property optional, which is how "update only some
+fields" inputs are described:
+
+```ts
+type User = { name: string; retries: number };
+
+function applyPatch(user: User, patch: Partial<User>): User {
+  return { ...user, ...patch };
+}
+```
+
+`Pick<T, K>` keeps only the named keys:
+
+```ts
+type UserName = Pick<User, "name">; // { name: string }
+```
+
+`Awaited<ReturnType<typeof fn>>` reads what an async function eventually
+delivers, without calling it:
+
+```ts
+async function loadCount(): Promise<number> {
+  return 3;
+}
+
+type Delivered = Awaited<ReturnType<typeof loadCount>>; // number
+```
 
 For example:
 
@@ -2153,7 +2555,17 @@ Handbook pages for [conditional types](https://www.typescriptlang.org/docs/handb
 [mapped types](https://www.typescriptlang.org/docs/handbook/2/mapped-types.html),
 and [template literal types](https://www.typescriptlang.org/docs/handbook/2/template-literal-types.html).
 
-## TypeBox as Pi's runtime validation bridge
+### Answers {#answers-part-2}
+
+**Errors and exceptions, Checkpoint.** Any value can be thrown in JavaScript,
+not just `Error` objects, so the checker honestly reports the caught value as
+`unknown`. `instanceof Error` proves the value has the `Error` prototype, so
+`message` and `name` are safe to read. `cause` keeps the original error
+attached to the wrapping error so logs can show the full failure chain. Pi
+prefers a returned `Result`-style union when the immediate caller must handle
+the outcome, and throws when a failure should cross layers to the runtime.
+
+## Part 3 — TypeBox as Pi's runtime validation bridge {#typebox-as-pis-runtime-validation-bridge}
 
 The examples below use normal TypeScript module imports. An `import` statement
 loads a value or type from another module; the package name identifies a
@@ -2186,12 +2598,13 @@ type User = Static<typeof UserSchema>;
 
 There are two separate things here:
 
-```text
-Type.Object({ name: Type.String() })
-        |
-        +--> UserSchema: runtime value used for checks and JSON Schema
-        |
-        +--> Static<typeof UserSchema>: compile-time type for the checker
+```{mermaid}
+%%| label: fig-typebox-two-views
+%%| fig-cap: "One schema, two views: a runtime value and a compile-time type."
+flowchart TD
+  A["Type.Object({ name: Type.String() })"]
+  A --> B["UserSchema: runtime value for checks and JSON Schema"]
+  A --> C["Static of UserSchema: compile-time type"]
 ```
 
 `UserSchema` exists while the program runs. `User` is only a TypeScript type.
@@ -2489,12 +2902,16 @@ Answer these questions:
 5. Is `{ port: "3000", mode: "local" }` valid?
 6. Does the schema turn the string `"3000"` into the number `3000`?
 
-**Answer:** `port` and `mode` are required. `mode` is the literal union
-`"local" | "remote"`. `host` is optional and may be absent. The first object is
-valid; the second is invalid because `port` must be a number. TypeBox does not
-automatically convert the string to a number.
+(answer: [Part 3 answers](#answers-part-3))
 
-## Recognition-only advanced patterns
+### Answers {#answers-part-3}
+
+**TypeBox self-check.** `port` and `mode` are required. `mode` is the literal
+union `"local" | "remote"`. `host` is optional and may be absent. The first
+object is valid; the second is invalid because `port` must be a number.
+TypeBox does not automatically convert the string to a number.
+
+## Part 4 — Recognition-only advanced patterns {#recognition-only-advanced-patterns}
 
 These topics appear in Pi, but they are not part of the Everyday Types
 foundation. Read the short explanations, then return to the relevant source
@@ -2510,7 +2927,42 @@ async function loadMessage(): Promise<string> {
 }
 ```
 
-An async iterable produces multiple values over time:
+A Promise settles once: it either fulfills with one value or rejects with an
+error. Handle rejection with `try`/`catch` around the `await`:
+
+```ts
+try {
+  const message = await loadMessage();
+  console.log(message);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+}
+```
+
+The same rejection can be handled with `.catch` on the Promise itself, which
+you will recognize in code that cannot use `await`:
+
+```ts
+loadMessage()
+  .then((message) => console.log(message))
+  .catch((error) => console.error(String(error)));
+```
+
+To wait for several independent Promises, `Promise.all` fulfills with an array
+of results and rejects as soon as any one fails. `Promise.allSettled` always
+fulfills and reports each outcome, which is what you want when partial success
+is acceptable:
+
+```ts
+const [config, session] = await Promise.all([loadConfig(), loadSession()]);
+
+const outcomes = await Promise.allSettled([pingA(), pingB()]);
+for (const outcome of outcomes) {
+  if (outcome.status === "rejected") console.error(outcome.reason);
+}
+```
+
+An async iterable produces multiple values over time instead of one:
 
 ```ts
 async function* tokens(): AsyncIterable<string> {
@@ -2523,13 +2975,46 @@ for await (const token of tokens()) {
 }
 ```
 
-An `AbortSignal` carries a cancellation request from the owner to the work:
+If the generator throws (or a rejected Promise is awaited inside it), the
+`for await` loop rejects like any other `await`: wrap the loop in `try`/`catch`
+when partial output is better than a crash. Note the two loop forms: plain
+`for...of` iterates an `Iterable<T>` of values that already exist, while
+`for await...of` iterates an `AsyncIterable<T>` whose values arrive over time.
+An `AsyncIterable` is not awaitable itself; you await each element as the loop
+pulls it.
+
+An `AbortSignal` carries a cancellation request from the owner to the work.
+The owner creates the controller, starts the work with its signal, and is the
+only party that aborts:
 
 ```ts
-async function load(url: string, signal: AbortSignal): Promise<string> {
-  const response = await fetch(url, { signal });
-  return response.text();
+function startFetch(url: string): { cancel: () => void; done: Promise<string> } {
+  const controller = new AbortController();         // owner creates
+  const done = fetch(url, { signal: controller.signal })
+    .then((response) => response.text());           // worker receives
+  return { cancel: () => controller.abort(), done }; // owner aborts
 }
+```
+
+The reading questions are always the same three: who creates the controller,
+who calls `abort`, and who cleans up listeners and timers when the work ends.
+For a simple deadline you do not need a controller at all:
+
+```ts
+const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+```
+
+Workers that listen for cancellation with `signal.addEventListener("abort", ...)`
+should remove that listener when they finish, because a long-lived signal
+otherwise keeps the worker alive. The three shapes side by side:
+
+```{mermaid}
+%%| label: fig-async-shapes
+%%| fig-cap: "Promise: one value. Async iterable: many values. AbortSignal: one-way cancellation notice."
+flowchart LR
+  A[async work] --> B["one value or one error"]
+  C[async work] --> D["value 1"] --> E["value 2"]
+  F[owner] -->|abort| G["work stops"]
 ```
 
 The important reading habit is to follow the signal into the operation. Detailed
@@ -2593,7 +3078,7 @@ members, accessors with separate read/write types, and generic classes are
 recognition-only topics; do not design a class hierarchy until the runtime
 lifetime and contract require one.
 
-## Apply the basics to Pi
+## Part 5 — Apply the basics to Pi {#apply-the-basics-to-pi}
 
 ### Pi's runtime and developer workflow
 
@@ -2609,6 +3094,85 @@ Pi uses several ways to run and check TypeScript:
 
 Runtime success and type-check success are separate evidence. A loader can run
 code that later fails `erasableSyntaxOnly` or the repository type check.
+
+### Reading real Pi files
+
+Beyond ordinary `.ts` source, three artifacts shape what you can import and
+how the checker sees it.
+
+**`.d.ts` declaration files** describe types for code that lives elsewhere,
+such as a published package. They contain no implementations, only shapes, and
+`declare` marks "this exists at runtime; trust me":
+
+```ts
+// What you might see inside a dependency's .d.ts file
+export declare function createClient(options: ClientOptions): Client;
+```
+
+You can call `createClient` after importing it, but the body is in compiled
+JavaScript. A `.d.ts` file is a promise made to the checker, which is why it
+can also lie: the same caution as `as` applies at package boundaries.
+
+**`package.json` `exports`** maps the public entry points of a package. When
+you write `import { Type } from "@earendil-works/pi-ai"`, the `exports` field
+of that package's `package.json` decides which file (and which `.d.ts`)
+resolves. A path not listed there is private, which is why the modules section
+warns against deep imports.
+
+**Editor hover and go-to-definition** are the reading tools built on the
+checker. In VS Code (or any editor using the TypeScript language server),
+hovering a name shows its inferred type, and go-to-definition (F12) jumps to
+the declaration, including into `.d.ts` files. When a type in Pi source is
+unfamiliar, hover it before opening documentation; the answer is usually the
+declaration one jump away.
+
+**Multi-parameter generic signatures** become readable when you name each
+parameter's job. Here is the real `defineTool` and the head of the interface
+it returns, excerpted from
+`packages/coding-agent/src/core/extensions/types.ts` (around line 439; line
+numbers shift, so search for `export function defineTool`):
+
+```ts
+export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = unknown, TState = any> {
+	name: string;
+	label: string;
+	description: string;
+	parameters: TParams;
+	// ...
+	execute(
+		toolCallId: string,
+		params: Static<TParams>,
+		signal: AbortSignal | undefined,
+		onUpdate: AgentToolUpdateCallback<TDetails> | undefined,
+		ctx: ExtensionContext,
+	): Promise<AgentToolResult<TDetails>>;
+	// ...
+}
+
+export function defineTool<TParams extends TSchema, TDetails = unknown, TState = any>(
+	tool: ToolDefinition<TParams, TDetails, TState>,
+): ToolDefinition<TParams, TDetails, TState> & AnyToolDefinition {
+	return tool as ToolDefinition<TParams, TDetails, TState> & AnyToolDefinition;
+}
+```
+
+Read it with the generic tools from
+[Part 2](#pi-patterns-built-from-everyday-types):
+
+1. `<TParams extends TSchema = TSchema, ...>` declares three type parameters.
+   `extends TSchema` is a constraint; `= TSchema`, `= unknown`, `= any` are
+   defaults used when the caller does not pin them.
+2. `parameters: TParams` stores whatever schema you pass, so inference captures
+   your exact schema type instead of widening it.
+3. `params: Static<TParams>` in `execute` is the payoff: the callback receives
+   the static type derived from your schema. This is why `params.name` is a
+   string in the hello tool without any annotation.
+4. The function returns the same interface intersected with
+   `AnyToolDefinition` so a heterogeneous tool array can accept it.
+
+The annotated `AgentEvent` excerpt in
+[Discriminated unions in Pi](#discriminated-unions-in-pi) is the same exercise
+applied to a union: real path, real code, numbered commentary.
 
 ### Guided source tour: a custom tool
 
@@ -2627,16 +3191,18 @@ after understanding the small example above.
 
 ### Guided source tour: an agent event
 
-Start with the literal `type` values in `AgentEvent` in
-`packages/agent/src/types.ts`. Find a consumer in `packages/agent/src/agent-loop.ts`.
-For one event, answer:
+Start with the `AgentEvent` excerpt in
+[Discriminated unions in Pi](#discriminated-unions-in-pi), then open the real
+union in `packages/agent/src/types.ts`. Find a consumer in
+`packages/agent/src/agent-loop.ts`. For one event, answer:
 
 - Which literal selects the branch?
 - Which fields are available after narrowing?
 - Is the event emitted immediately or stored?
 - What happens if a new variant is added?
 
-This is the same union-and-narrowing skill used in Part 1, applied to Pi.
+This is the same union-and-narrowing skill used in
+[Part 1](#everyday-typescript-fundamentals), applied to Pi.
 
 ### Guided source tour: state and lifecycle
 
@@ -2666,6 +3232,54 @@ Use this workflow for a TypeScript change:
 
 For a documentation-only change, render the guide and inspect the generated
 PDF. For a tool change, test valid input, invalid input, and cancellation.
+
+### Reading a Pi test file
+
+Pi's tests are the best worked examples of the valid/invalid pattern. Here is
+an excerpt from `packages/coding-agent/test/git-ssh-url.test.ts`, which tests
+a small URL parser (line numbers shift; search for `parseGitUrl`):
+
+```ts
+import { describe, expect, it } from "vitest";
+import { parseGitUrl } from "../src/utils/git.ts";
+
+describe("Git URL Parsing", () => {
+	it("should parse HTTPS URL", () => {
+		const result = parseGitUrl("https://github.com/user/repo");
+		expect(result).toMatchObject({
+			host: "github.com",
+			path: "user/repo",
+			repo: "https://github.com/user/repo",
+		});
+	});
+
+	it("should reject unsafe git install path inputs", () => {
+		for (const source of [
+			"git:git@evil.example:../../victim/repo",
+			"https://evil.example/..%2F..%2Fvictim/repo",
+		]) {
+			expect(parseGitUrl(source)).toBeNull();
+		}
+	});
+});
+```
+
+Reading notes:
+
+1. `import { describe, expect, it } from "vitest"` brings the three building
+   blocks: `describe` groups tests, `it` is one test, `expect` asserts.
+2. The second import is the unit under test, pulled from source with the same
+   relative `.ts` convention as any Pi module.
+3. The first `it` is the valid-input case: a well-formed URL must produce a
+   structured result, checked field by field with `toMatchObject`.
+4. The second `it` is the invalid-input case: a table of hostile inputs, each
+   expected to return `null` rather than throw or half-parse.
+
+Tool tests add the third case from the advice above — cancellation — by
+passing an aborted `AbortSignal` into `execute` and asserting the result.
+When you change a parser, schema, or tool, mirror this shape: one `it` for
+valid input, one for invalid input, and one for cancellation where a signal
+reaches the code.
 
 ## Reference: use when you get stuck
 
@@ -2815,8 +3429,6 @@ const user: User = { name: "Ada" };
 What can `user.nickname` be? Which operator gives a fallback without replacing
 an empty string?
 
-**Answer:** it can be `string | undefined`; `??` preserves an empty string.
-
 #### Check 2: union and callback
 
 ```ts
@@ -2827,9 +3439,6 @@ function handle(input: Input, emit: (text: string) => void): void {
 ```
 
 What narrows `input`? When is `emit` called?
-
-**Answer:** `input.type` narrows the union; `emit` is called immediately in the
-branch, although the function itself was passed in by the caller.
 
 #### Check 3: schema and cancellation
 
@@ -2847,8 +3456,15 @@ const valid = Value.Check(ParamsSchema, raw);
 Which values are runtime? Which name is compile-time? What would `Value.Check`
 inspect?
 
-**Answer:** `ParamsSchema`, `raw`, and `valid` are runtime values; `Params` is a
-compile-time type; `Value.Check` inspects `raw` against `ParamsSchema`.
+#### Answers {#answers-staged-self-check}
+
+**Check 1.** It can be `string | undefined`; `??` preserves an empty string.
+
+**Check 2.** `input.type` narrows the union; `emit` is called immediately in
+the branch, although the function itself was passed in by the caller.
+
+**Check 3.** `ParamsSchema`, `raw`, and `valid` are runtime values; `Params`
+is a compile-time type; `Value.Check` inspects `raw` against `ParamsSchema`.
 
 ### Type-checking a standalone extension
 
@@ -2871,6 +3487,20 @@ the files to include:
   "include": ["src/**/*.ts"]
 }
 ```
+
+What each option does and why an extension project wants it:
+
+| Option | Effect | Why Pi/extensions need it |
+|---|---|---|
+| `target: ESNext` | compile against the newest JavaScript features | Pi runs on current Node; no down-leveling needed |
+| `module: ESNext` | emit/read standard ESM `import`/`export` | Pi packages and extensions are ESM-only |
+| `moduleResolution: bundler` | resolve imports the way bundlers and loaders do | matches how `jiti`/`tsx` load extension files |
+| `strict: true` | enable the full family of strict checks | the same posture the Pi repository uses |
+| `skipLibCheck: true` | do not type-check dependencies' `.d.ts` files | keeps dependency declaration quirks out of your build |
+| `noEmit: true` | check only, write no JavaScript | `jiti` loads the `.ts` directly; emitting is unused |
+| `erasableSyntaxOnly: true` | reject syntax that needs code generation (enums, namespaces, parameter properties) | Node strips types when running extensions; non-erasable syntax would fail at load time |
+| `allowImportingTsExtensions: true` | permit explicit `.ts` suffixes in imports | Pi's convention is relative imports with the `.ts` suffix |
+| `include: ["src/**/*.ts"]` | the files this project checks | scopes the check to your extension source |
 
 Loading through `jiti` and checking through `tsc` or `tsgo` are separate. A
 loader proving that a file can start does not prove that the file is type-safe.
