@@ -19,6 +19,26 @@ cancellation, then continue directly to [architecture](#sec:architecture).
   reference tables that were moved out of this route.
 :::
 
+## Words we use
+
+Six terms appear throughout this chapter and the workbook. Read these once now;
+each is explained fully where it is used.
+
+- **Static / compile-time:** what the TypeScript checker can prove by reading
+  the source, before the program runs.
+- **Runtime:** what actually happens when Node executes the JavaScript.
+- **Erasable syntax:** TypeScript syntax (annotations, interfaces, `type`
+  aliases) that can be removed without changing behavior. Pi restricts itself
+  to erasable syntax so Node can run its `.ts` files directly.
+- **Boundary:** a place where data enters from outside the checked program —
+  JSON, configuration files, the network, a model response, an extension.
+- **Discriminant:** a shared literal property (usually `type`) that identifies
+  which variant of a union a value is.
+- **Narrowing:** a runtime check (`typeof`, `===`, `in`, `Array.isArray`) that
+  tells the checker which union variant it is looking at.
+- **Schema:** a runtime description of allowed data that a program can pass to
+  a validator. Pi uses TypeBox schemas.
+
 ## What this route teaches
 
 The goal is recognition, not memorization. By the end you should be able to:
@@ -36,6 +56,18 @@ use the [Everyday Types foundations](17-typescript-foundations-workbook.qmd#ever
 in the workbook rather than stopping the Pi route.
 
 ## Setup and runtime orientation
+
+### The toolchain in one paragraph
+
+The repository is an npm workspace. `package.json` lists the dependencies and
+the **scripts** — named commands such as `check` that you run as
+`npm run check`. `npm install` downloads the dependencies into `node_modules/`.
+The repository convention is `npm install --ignore-scripts`, which skips
+package lifecycle scripts for supply-chain safety; the dependencies work
+without them. `npm run check` is the repository quality gate: it type-checks,
+lints, and runs related static checks, but not the test suite. Chapter 12
+covers the full contribution workflow; here you only need the three verbs
+below.
 
 ### Install, run, and check are different actions
 
@@ -60,6 +92,53 @@ install -> write a small example -> run it -> check it -> inspect the error
 For a guide-only change, render the book. For code changes, the repository
 quality gate is `npm run check`.
 
+### Your first ten minutes: run and check one file
+
+Do this once, now. It makes every later example concrete. Create a scratch
+directory outside the repository and one file in it:
+
+```ts
+// hello.ts
+type User = { name: string };
+
+const user: User = { name: "Ada" };
+console.log(`Hello, ${user.name}`);
+```
+
+Run it — Node strips the type syntax and executes the JavaScript:
+
+```text
+$ node --experimental-strip-types hello.ts
+Hello, Ada
+```
+
+Check it — `tsgo` reads the types and reports nothing, because the file is
+valid:
+
+```text
+$ npx tsgo --noEmit hello.ts
+(no output: the check passed)
+```
+
+Now introduce a mistake: change `user.name` to `user.nmae` and check again:
+
+```text
+$ npx tsgo --noEmit hello.ts
+hello.ts:4:27 - error TS2339: Property 'nmae' does not exist on type 'User'. Did you mean 'name'?
+```
+
+Read the diagnostic left to right: the file and position (`hello.ts`, line 4,
+column 27), the error code (`TS2339`), the value you have (`User`), and the
+mismatch (a property that does not exist). Note two things:
+
+1. `node --experimental-strip-types hello.ts` still runs the misspelled file
+   and prints `Hello, undefined` — running is not checking.
+2. Every TypeScript error answers the same three questions: *what value do I
+   have, what did the code require, and where did they diverge?*
+
+The workbook's [common TypeScript errors](17-typescript-foundations-workbook.qmd#common-typescript-errors)
+reference decodes the diagnostics you will meet most often in Pi.
+
 ### Pi's erasable TypeScript boundary
 
 Pi source avoids TypeScript syntax that needs a JavaScript transform, including
@@ -78,8 +157,10 @@ const claimed = raw as string; // assertion only; no runtime validation
 
 ### Readiness check
 
-Before continuing, confirm that you can answer these questions. If not, start
-with the linked workbook section.
+Before continuing, try to answer these questions. The
+[answers](#answers-to-the-readiness-check) at the end of the chapter point to
+the workbook section that explains each one — peeking is fine; being unable to
+find the answer is the signal to read that section first.
 
 1. Which command installs packages, which runs a file, and which checks types?
 2. What is the difference between a value at runtime and a type before runtime?
@@ -130,8 +211,9 @@ const pair: Pair = [2, 3];
 console.log(add(...pair));
 ```
 
-Within one Pi package, use relative imports with the `.ts` suffix. Across
-packages, use a public package name:
+When reading Pi, recognize three import shapes: relative imports with a `.ts`
+suffix inside one package, public package names across packages, and
+`import type` for checker-only names:
 
 ```ts
 import { Type } from "@earendil-works/pi-ai";
@@ -139,7 +221,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 ```
 
 Prefer public entry points over deep imports into another package's source.
-The public boundary is the contract used by published consumers.
+The public boundary is the contract used by published consumers. Default
+exports, re-exports, and module-resolution troubleshooting are covered in the
+workbook's [modules section](17-typescript-foundations-workbook.qmd#modules-and-imports).
 
 ## Discriminated unions
 
@@ -152,6 +236,10 @@ type AgentNotice =
   | { type: "finished"; stopReason: "stop" | "error" }
   | { type: "failed"; message: string };
 
+function assertNever(value: never): never {
+  throw new Error(`Unexpected variant: ${String(value)}`);
+}
+
 function label(notice: AgentNotice): string {
   switch (notice.type) {
     case "started":
@@ -160,15 +248,23 @@ function label(notice: AgentNotice): string {
       return `finished: ${notice.stopReason}`;
     case "failed":
       return `failed: ${notice.message}`;
+    default:
+      return assertNever(notice);
   }
 }
 ```
 
 The `type` check is evidence. Before narrowing, code may use only operations
 shared by every variant; after `notice.type === "failed"`, `message` is safe.
-Pi uses this pattern for agent events, message roles, content blocks, and
-session entries. Start at the union definition, then find each `if` or `switch`
-that consumes it.
+The `default` branch looks unreachable, and it is: `assertNever` accepts only
+`never`, so the line compiles precisely because every variant is already
+handled. When Pi later adds a fourth variant, that line stops compiling until
+you handle it — the checker becomes your to-do list. This pattern matters in
+practice: Pi uses discriminated unions for agent events, message roles, content
+blocks, and session entries, all of which grow over time. Start at the union
+definition, then find each `if` or `switch` that consumes it. The workbook's
+[discriminated unions section](17-typescript-foundations-workbook.qmd#discriminated-unions-in-pi)
+adds user-defined predicates and more narrowing forms.
 
 ## Callbacks and closures
 
@@ -196,7 +292,9 @@ its return value, rather than passing the function. A **closure** is a function
 that remembers variables from where it was created. Look for the cleanup API
 when a closure is stored in a long-lived registry.
 
-Pi handlers often receive a full contract even when they use only one argument:
+Pi handlers often receive a full contract even when they use only one argument,
+and names such as `_event`, `_signal`, and `_ctx` mark parameters that are part
+of the contract but unused by that handler:
 
 ```ts
 function onMessage(handler: (text: string, source: string) => void): void {
@@ -206,18 +304,19 @@ function onMessage(handler: (text: string, source: string) => void): void {
 onMessage((text, _source) => console.log(text));
 ```
 
-Names such as `_event`, `_signal`, and `_ctx` commonly mean that a parameter is
-part of the contract but unused by this handler.
+The workbook's [callbacks section](17-typescript-foundations-workbook.qmd#functions-as-callbacks-and-closures)
+covers optional callback parameters, overloads, and the `this` pitfall when a
+class method is registered as a callback.
 
 ## `unknown` versus `any`
 
 At a JSON, configuration, network, model, or extension boundary, the checker
 cannot prove that incoming data has the expected shape. `any` disables that
-question:
+question — nothing is checked, and mistakes surface at runtime:
 
 ```ts
 function unsafe(value: any): string {
-  return value.name.toUpperCase();
+  return value.name.toUpperCase(); // compiles; may crash
 }
 ```
 
@@ -236,7 +335,10 @@ function readName(value: unknown): string | undefined {
 
 An assertion such as `value as User` changes only the checker's view. It does
 not convert, inspect, or repair the runtime value. Prefer `unknown` plus a
-narrowing guard, or a runtime schema when the boundary is shared.
+narrowing guard, or a runtime schema when the boundary is shared. The workbook
+walks [one JSON value through four treatments](17-typescript-foundations-workbook.qmd#unknown-any-and-external-data)
+and covers error handling at the same boundaries in
+[errors and exceptions](17-typescript-foundations-workbook.qmd#errors-and-exceptions).
 
 ## TypeBox: one schema, two views
 
@@ -285,7 +387,7 @@ const helloTool = defineTool({
   label: "Hello",
   description: "Greet one person.",
   parameters: Type.Object({ name: Type.String() }),
-  async execute(_toolCallId, params, signal) {
+  async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
     if (signal?.aborted) {
       return { content: [{ type: "text", text: "cancelled" }] };
     }
@@ -301,29 +403,28 @@ export default function register(pi: ExtensionAPI): void {
 Read the example from the outside in: `Type.Object` is a runtime parameter
 schema; `defineTool` connects that schema to `params`; Pi validates model
 arguments before `execute`; and the returned `content` becomes the tool result.
-The optional signal should be forwarded to cancellable work.
+Pi passes five arguments to `execute`; the `_`-prefixed ones are part of the
+contract that this tool does not use. The optional signal should be forwarded
+to cancellable work. The workbook breaks this same example down field by field
+in [TypeBox in a Pi tool](17-typescript-foundations-workbook.qmd#typebox-in-a-pi-tool).
 
 ## Promises, streams, and cancellation
 
-An `async` function returns one eventual result as a `Promise<T>`:
+An `async` function returns one eventual result as a `Promise<T>`; `await`
+unwraps it. An async iterable produces multiple values over time, and
+`for await` consumes each one as it arrives:
 
 ```ts
 async function loadStatus(): Promise<string> {
   return "working";
 }
 
-const status = await loadStatus();
-```
-
-An async iterable produces multiple values over time. `for await` consumes each
-one as it arrives:
-
-```ts
 async function* tokens(): AsyncIterable<string> {
   yield "Hel";
   yield "lo";
 }
 
+const status = await loadStatus();
 for await (const token of tokens()) {
   console.log(token);
 }
@@ -340,20 +441,23 @@ async function load(url: string, signal: AbortSignal): Promise<string> {
 
 When reading Pi, follow the signal into the file, process, network, or provider
 operation. The owner creates or receives the `AbortController`; the operation
-must decide how to stop and clean up. The agent and tool chapters cover retry,
-timeouts, and parallel Promise behavior in their concrete contexts.
+must decide how to stop and clean up. Rejection, `Promise.all`, timeouts, and
+error behavior are covered in the workbook's
+[async section](17-typescript-foundations-workbook.qmd#promises-streams-and-abortsignal);
+retry and parallel behavior in concrete contexts belong to the agent and tool
+chapters.
 
 ## Pi workflow and source-reading checklist
 
 Pi uses an agent harness and a coding-agent application. The normal path crosses
 these packages:
 
-| Package | Responsibility | First source to inspect |
-|---|---|---|
-| `packages/tui` | reusable terminal rendering primitives | `src/index.ts`, `src/tui.ts` |
-| `packages/ai` | models, provider dispatch, and streaming contracts | `src/index.ts`, `src/types.ts` |
-| `packages/agent` | provider-independent loop, messages, and tools | `src/agent.ts`, `src/agent-loop.ts` |
-| `packages/coding-agent` | CLI, sessions, built-in tools, resources, extensions | `src/main.ts`, `src/core/sdk.ts` |
+| Package | Responsibility | First source to inspect | Do this now |
+|---|---|---|---|
+| `packages/tui` | reusable terminal rendering primitives | `src/index.ts`, `src/tui.ts` | open `src/tui.ts` and find one interface with a literal-union property |
+| `packages/ai` | models, provider dispatch, and streaming contracts | `src/index.ts`, `src/types.ts` | open `src/types.ts` and list three literal `type` tags |
+| `packages/agent` | provider-independent loop, messages, and tools | `src/agent.ts`, `src/agent-loop.ts` | find the `AgentEvent` union in `src/types.ts`, then one `switch` that consumes it in `src/agent-loop.ts` |
+| `packages/coding-agent` | CLI, sessions, built-in tools, resources, extensions | `src/main.ts`, `src/core/sdk.ts` | open `examples/extensions/hello.ts` and identify the schema, the callback, and the signal |
 
 For a change, use this order:
 
@@ -376,4 +480,38 @@ if you want a slower exercise before opening the repository.
 You are ready for architecture when you can explain: which package owns a
 behavior, which literal selects a union branch, which callback runs later, why
 an external value is `unknown`, where TypeBox performs runtime validation, and
-which signal or cleanup method owns cancellation.
+which signal or cleanup method owns cancellation. Check yourself against the
+[answers](#answers-to-the-closing-checkpoint) below.
+
+## Answers to the readiness check
+
+1. `npm install --ignore-scripts` installs, `node --experimental-strip-types`
+   (or `tsx`) runs, `tsgo --noEmit` checks. See
+   [install, run, and check](#install-run-and-check-are-different-actions).
+2. A type is a compile-time description the checker erases; a value is what
+   exists while JavaScript runs. See the workbook's
+   [what TypeScript checks—and what it erases](17-typescript-foundations-workbook.qmd#what-typescript-checksand-what-it-erases).
+3. `string | undefined` — the property may be absent. See
+   [object types and optional properties](17-typescript-foundations-workbook.qmd#object-types-and-optional-properties).
+4. A runtime check such as `typeof value === "string"`. See
+   [union types and basic narrowing](17-typescript-foundations-workbook.qmd#union-types-and-basic-narrowing).
+5. `as User` changes only the checker's view; it validates nothing at runtime.
+   See [type assertions](17-typescript-foundations-workbook.qmd#type-assertions).
+
+## Answers to the closing checkpoint
+
+- **Package ownership:** TUI rendering → `packages/tui`; models/providers →
+  `packages/ai`; the provider-independent loop → `packages/agent`; CLI,
+  sessions, tools, extensions → `packages/coding-agent`.
+- **Union branch:** the literal value of the shared discriminant property
+  (`type`, `role`, …) compared with `===` or matched in a `switch`.
+- **Callback timing:** registration stores the function; it runs when the
+  owner invokes it — later for event handlers and tool `execute`.
+- **External values:** the checker cannot prove the shape of JSON, config,
+  network, or model data, so it is typed `unknown` until a guard or schema
+  check supplies evidence.
+- **TypeBox validation:** in `Value.Check(schema, value)` (and inside Pi where
+  tool arguments are validated), never in `Static<typeof ...>`.
+- **Cancellation ownership:** the object that created the `AbortController`
+  decides when to abort; the operation that received the `signal` decides how
+  to stop and clean up.
