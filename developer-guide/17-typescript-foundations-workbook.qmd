@@ -2,8 +2,10 @@
 
 This optional appendix keeps the long-form TypeScript lessons that support the
 short [Pi-oriented route](01-typescript-for-pi.qmd#sec:typescript). Start here
-if you are new to TypeScript or JavaScript, or return to a linked section when a
-concept in the main route needs a slower explanation.
+if you know basic JavaScript and are new to TypeScript, or return to a linked
+section when a concept in the main route needs a slower explanation. If
+JavaScript is new to you, read a JavaScript primer first; this workbook assumes
+objects, branches, loops, callbacks, template strings, and Promises.
 
 The material below is preserved as a workbook: definitions, small examples,
 worked exercises, common mistakes, TypeBox practice, source-reading tours, and
@@ -16,6 +18,79 @@ Read the foundations in order if you are coming from JavaScript. Otherwise use
 the section links from chapter 01, do the checkpoints before reading answers,
 and return to [the main Pi route](01-typescript-for-pi.qmd#sec:typescript) when
 you are ready for architecture.
+
+The examples assume Pi's strict, erasable-TypeScript posture. Compiler options
+can change inferred types and diagnostics: `strict` enables several checks, but
+options such as `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes` add
+further distinctions. When an exercise asks what the checker sees, note the
+assumption; when it asks what JavaScript does, reason about runtime behavior.
+The official [TypeScript Handbook introduction](https://www.typescriptlang.org/docs/handbook/intro.html)
+is the broader reference. Use the Handbook's [Basics](https://www.typescriptlang.org/docs/handbook/2/basic-types.html),
+[Everyday Types](https://www.typescriptlang.org/docs/handbook/2/everyday-types.html),
+[Narrowing](https://www.typescriptlang.org/docs/handbook/2/narrowing.html),
+[More on Functions](https://www.typescriptlang.org/docs/handbook/2/functions.html),
+[Object Types](https://www.typescriptlang.org/docs/handbook/2/objects.html),
+[Classes](https://www.typescriptlang.org/docs/handbook/2/classes.html),
+[Modules](https://www.typescriptlang.org/docs/handbook/2/modules.html), and
+[Utility Types](https://www.typescriptlang.org/docs/handbook/utility-types.html)
+for complete chapter coverage. This appendix teaches Everyday Types, narrowing,
+functions, object shapes, and the Pi patterns built from them; later sections
+teach selected patterns for recognition rather than reproducing every Handbook
+chapter. The repository's erasable-syntax rules intentionally exclude enums,
+namespaces, parameter properties, and `import =`/`export =` syntax.
+
+For each exercise, first predict the checker result, then predict runtime
+behavior where relevant, and finally explain which boundary supplies the
+information.
+
+## What TypeScript checks—and what it erases
+
+TypeScript is a **static type checker**: it analyzes a program before the
+JavaScript runs and reports operations that do not match the types it can
+prove. This catches typos, missing properties, wrong arguments, and some
+impossible branches. It does not replace running the program or validating data
+that arrives later.
+
+```ts
+const announcement = "Hello";
+// announcement.toLocaleLowercase(); // checker catches the misspelling
+
+const parsed: unknown = JSON.parse('{"count":"many"}');
+// TypeScript cannot know that parsed is a valid application object.
+// A runtime guard or TypeBox schema must inspect it before use.
+```
+
+The TypeScript compiler, commonly invoked as `tsc`, performs type checking and
+can transform TypeScript into JavaScript. Type annotations, interfaces, type
+aliases, and most other type-only syntax are erased; they do not change runtime
+behavior. A loader such as `tsx` or `jiti` can execute a file without proving
+that it passes the repository's type check. Conversely, a successful type check
+cannot prove that a network response has the shape your code expects.
+
+A small configuration controls how much evidence the checker requires:
+
+| Option | Main effect in this workbook |
+|---|---|
+| `strict` | enables the family of strict checking options |
+| `noImplicitAny` | reports parameters and values that silently become `any` |
+| `strictNullChecks` | keeps `null` and `undefined` separate from ordinary values |
+| `noUncheckedIndexedAccess` | includes `undefined` in unchecked indexed lookups |
+
+Pi enables `strict` but not every stricter option. Always check the active
+configuration before treating an inferred type as a universal TypeScript rule.
+The separate [Pi TypeScript route](01-typescript-for-pi.qmd#sec:typescript)
+explains the repository commands; this section supplies the mental model needed
+to interpret their results.
+
+**Checkpoint:** Which of these facts can only be established at runtime: that a
+value is a string, that a property name is spelled correctly, or that a JSON
+response has the expected shape? What does type erasure mean? Which option
+changes the static result of an unchecked array access?
+
+**Answer:** A checker can catch a misspelled property in checked source, but it
+cannot establish the shape of later JSON without runtime validation. Type
+syntax is removed or transformed before JavaScript runs. `noUncheckedIndexedAccess`
+adds `undefined` to the static result of an unchecked indexed access.
 
 ## Everyday TypeScript fundamentals
 
@@ -63,11 +138,18 @@ Array indexing can produce `undefined` when an index does not exist:
 
 ```ts
 const first = messages[0];
-// With strict checking, first is string | undefined.
+// At runtime, an empty array makes this undefined.
 
 const missing = messages[99];
 // missing may be undefined at runtime.
 ```
+
+With ordinary `strict` checking, TypeScript may still treat an indexed
+`string[]` lookup as `string`. The `noUncheckedIndexedAccess` option adds
+`undefined` to the static result, making the checker reflect the possible
+missing element. Pi does not enable that option by default, so keep both facts
+in mind: a static type does not remove the runtime hazard, and compiler options
+matter when reading an indexed access.
 
 Do not confuse the type of an array with the type of one item. `string[]` means
 many strings; `string` means one string.
@@ -135,7 +217,9 @@ arrays or objects containing primitive values. Start by identifying the simple
 values before trying to understand the larger type.
 
 **Checkpoint:** What are the types of `"ready"`, `17`, `false`, and
-`["a", "b"]`? What type can `messages[99]` have? Why can `any` hide a bug?
+`["a", "b"]`? What can `messages[99]` return at runtime? Under ordinary
+`strict` checking, what may the checker report for that lookup, and what changes
+when `noUncheckedIndexedAccess` is enabled? Why can `any` hide a bug?
 
 **Try it:** Before reading the answers, predict the checker's type for each
 value:
@@ -258,6 +342,30 @@ const total = add(2, 3);
 // add("2", 3); // error: the first argument must be number
 ```
 
+A function is also a value, so its callable shape can be written as a type:
+
+```ts
+type Formatter = (value: string, width: number) => string;
+
+const format: Formatter = (value, width) => value.slice(0, width);
+```
+
+The parameter names in a function type are labels for readers; the types and
+return type describe what callers may provide and receive. An object type can
+also describe a callable value with a call signature, although the function
+type expression is usually clearer for a plain callback:
+
+```ts
+type CallableWithLabel = {
+  label: string;
+  (value: string): string;
+};
+```
+
+`new (...) => T` is a construct signature for values called with `new`. You
+will mostly recognize these signatures in library declarations rather than
+write them in Pi extensions.
+
 `void` means that the caller should not expect a useful return value:
 
 ```ts
@@ -297,6 +405,38 @@ function connectWithDefault(host: string, port = 443): string {
 These are related but not identical. `port?: number` describes a possibly
 missing input. `port = 443` also gives the implementation a runtime value after
 the default is applied.
+
+#### Rest parameters and destructured parameters
+
+A rest parameter gathers zero or more arguments into an array:
+
+```ts
+function joinLabels(separator: string, ...labels: string[]): string {
+  return labels.join(separator);
+}
+
+joinLabels(", ", "read", "write");
+```
+
+The spread syntax passes an array's elements as separate arguments. The type of
+the rest parameter describes each gathered element, not the whole call:
+
+```ts
+const modes = ["read", "write"];
+joinLabels(", ", ...modes);
+```
+
+A parameter can destructure an object while the annotation describes the whole
+object pattern:
+
+```ts
+function pointLabel({ x, y }: { x: number; y: number }): string {
+  return `(${x}, ${y})`;
+}
+```
+
+The type goes after the destructuring pattern. `x: number` inside the pattern
+would rename a property to a variable called `number`; it would not annotate it.
 
 #### A short Promise preview
 
@@ -458,9 +598,90 @@ function lastNameOrAction(user: User): string {
 Use the compact operators for simple value selection. Use an `if` when the
 missing case changes control flow or needs an explanation.
 
+#### Readonly properties and arrays
+
+`readonly` prevents assignment through a particular TypeScript view. It does
+not freeze the object at runtime, and it is shallow:
+
+```ts
+interface Report {
+  readonly id: string;
+  tags: readonly string[];
+}
+
+const report: Report = { id: "r1", tags: ["build"] };
+// report.id = "r2"; // error: readonly property
+// report.tags.push("test"); // error: readonly array
+```
+
+A readonly view can still refer to mutable data held elsewhere. Treat it as a
+contract for callers, not as runtime protection. `ReadonlyArray<string>` is
+another spelling of `readonly string[]`.
+
+#### Index signatures and known keys
+
+An index signature describes an object whose property names are not all known
+in advance:
+
+```ts
+type Metadata = {
+  [key: string]: unknown;
+};
+
+const metadata: Metadata = { provider: "local", retries: 2 };
+```
+
+Use `Record<K, V>` when the key set is known or is itself a type:
+
+```ts
+type StatusLabels = Record<"idle" | "running", string>;
+const labels: StatusLabels = { idle: "Waiting", running: "Working" };
+```
+
+An index signature is not an exact-object guarantee. It describes how named
+properties may be read, while runtime data may still need validation.
+
+#### Intersections and tuples
+
+The `&` operator combines requirements. A value assigned to `DetailedReport`
+must satisfy both parts:
+
+```ts
+type BasicReport = { title: string };
+type DetailedReport = BasicReport & { error?: string };
+```
+
+Interfaces can express an additive relationship with `extends`:
+
+```ts
+interface NamedReport { title: string }
+interface TimedReport extends NamedReport { elapsedMs: number }
+```
+
+An intersection is often convenient for combining aliases. Interface extension
+can make a public inheritance relationship clearer; conflicting intersections
+can produce an unusable `never` property, so do not combine shapes casually.
+
+A tuple is an array with a fixed position contract:
+
+```ts
+type Pair = [string, number];
+const entry: Pair = ["attempts", 2];
+// const wrong: Pair = [2, "attempts"]; // positions have different types
+
+const fixed = ["read", "write"] as const;
+// readonly ["read", "write"]
+```
+
+`[string, number]` is not the same as `(string | number)[]`: the tuple is
+position-aware and has a fixed length. Use `readonly` tuples when callers must
+not change the positions.
+
 **Checkpoint:** What is the difference between an optional property and
 optional chaining? What happens to `0` with `||` and `??`? Why does the checker
-require a check before calling `toUpperCase()` on `user.last`?
+require a check before calling `toUpperCase()` on `user.last`? What runtime
+protection does `readonly` provide? None. Which type describes an open-ended
+string-keyed object?
 
 ### Union types and basic narrowing
 
@@ -496,6 +717,8 @@ string. In the second branch, it is known to be a number.
 
 #### Other everyday narrowing checks
 
+`Array.isArray` is a runtime check that TypeScript understands:
+
 ```ts
 function welcome(value: string | string[]): string {
   if (Array.isArray(value)) {
@@ -515,6 +738,45 @@ function explain(mode: Mode): string {
   return "This operation changes data.";
 }
 ```
+
+A truthiness check also narrows, but it treats `""`, `0`, `false`, `null`, and
+`undefined` as false. Do not use it when an empty string or zero is meaningful:
+
+```ts
+function label(value: string | undefined): string {
+  if (!value) return "missing"; // also treats "" as missing
+  return value.toUpperCase();
+}
+```
+
+The `in` operator narrows object unions by checking property presence:
+
+```ts
+type Fish = { swim: () => void };
+type Bird = { fly: () => void };
+
+function move(animal: Fish | Bird): void {
+  if ("swim" in animal) animal.swim();
+  else animal.fly();
+}
+```
+
+`instanceof` performs a prototype-based runtime check and narrows class-like
+values such as `Date | string`. Pi usually prefers structural shapes and
+literal discriminants, but you may encounter this check in dependencies.
+
+Assignments and reachability affect the observed type too:
+
+```ts
+let value: string | number = "ready";
+value.toUpperCase(); // observed as string here
+value = 3;
+value.toFixed();     // observed as number here
+```
+
+An early return can remove a union member from the code that follows. This
+control-flow analysis is why a check in one branch changes what the checker
+allows later.
 
 If every union member has a property in common, that property is available
 without narrowing:
@@ -761,6 +1023,35 @@ only ever hold one literal.
 does `event.type` widen inside a normal object? When is a literal union more
 useful than one literal type?
 
+#### Checking without widening: `satisfies`
+
+The `satisfies` operator checks that an expression is compatible with a type
+without replacing the expression's more specific inferred type:
+
+```ts
+type ModeLabels = Record<"read" | "write", string>;
+
+const modeLabels = {
+  read: "Reading",
+  write: "Writing",
+} satisfies ModeLabels;
+
+modeLabels.read.toUpperCase(); // still known as a string
+// modeLabels.preview; // error: this key was not declared
+```
+
+Compare three different tools:
+
+| Syntax | Main effect | Runtime validation? |
+|---|---|---:|
+| `const x: T = value` | checks and gives `x` the declared type | no |
+| `value as T` | asserts that the checker should treat it as `T` | no |
+| `value satisfies T` | checks compatibility while preserving useful inference | no |
+
+`satisfies` is useful for configuration and literal tables. It does not parse,
+validate, freeze, or convert runtime data. In Pi source you may see it combined
+with `as const` and `Record` when exact keys and readonly values are intended.
+
 ### `null`, `undefined`, and related operators
 
 JavaScript uses both `undefined` and `null` for absent values:
@@ -958,7 +1249,10 @@ Answer these questions:
 
 **Answer:** `title` is inferred as the literal type `"Build"` because it is a
 `const` primitive. `attempts` is `number[]`. `ready` is the literal type
-`false`. Indexing may produce `undefined` when no element exists.
+`false`. Indexing may produce `undefined` when no element exists at runtime;
+with `noUncheckedIndexedAccess`, the checker also includes `undefined` in the
+indexed result. Without that option, ordinary `strict` checking does not by
+itself guarantee that the static result includes `undefined`.
 
 #### Exercise 2: annotation or inference
 
@@ -1039,6 +1333,84 @@ Can `claimed.count + 1` be trusted? What would a safe implementation do first?
 **Answer:** No. The assertion does not change the runtime string `"many"`.
 A safe implementation checks that the input is an object and that `count` is a
 number, or validates it with a runtime schema.
+
+#### Exercise 7: readonly tuples
+
+**Focus:** predict a type and distinguish compile-time readonly from runtime
+mutability.
+
+```ts
+const modes = ["read", "write"] as const;
+type Mode = (typeof modes)[number];
+
+function useMode(mode: Mode): void {
+  console.log(mode);
+}
+```
+
+Here, `typeof modes` in type position captures the compile-time type of
+`modes`, and `[number]` extracts the element types as a union. The full
+explanation appears later in [Types from existing declarations](#types-from-existing-declarations).
+
+What is the type of `modes`? Which values can `Mode` contain? Can code call
+`modes.push("preview")`? What does this example protect at runtime?
+
+**Answer:** `modes` is `readonly ["read", "write"]`, and `Mode` is
+`"read" | "write"`. `push` is unavailable through the readonly type. Nothing
+freezes the runtime array; another mutable reference could still change it.
+
+#### Exercise 8: `satisfies` versus assertion
+
+**Focus:** predict checker diagnostics and runtime behavior at a validation
+boundary.
+
+```ts
+type Limits = Record<"retries" | "timeoutMs", number>;
+
+const limits = {
+  retries: 3,
+  timeoutMs: 1000,
+} satisfies Limits;
+```
+
+Does `satisfies` validate a value received from JSON? Does it change the
+runtime object? What kind of typo would the checker catch in this example?
+
+**Answer:** No. `satisfies` checks this source expression at compile time and
+has no runtime effect. It would catch a missing required key, an unexpected key
+in this object literal, or a non-number value, but it does not inspect later
+JSON data.
+
+#### Exercise 9: exhaustive narrowing
+
+**Focus:** predict the narrowed type and the compile-time failure caused by an
+unhandled union variant.
+
+```ts
+function assertNever(value: never): never {
+  throw new Error(`Unexpected variant: ${String(value)}`);
+}
+
+type Outcome =
+  | { type: "ok"; value: string }
+  | { type: "error"; message: string };
+
+function outcomeText(outcome: Outcome): string {
+  switch (outcome.type) {
+    case "ok": return outcome.value;
+    case "error": return outcome.message;
+    default: return assertNever(outcome);
+  }
+}
+```
+
+Why does the `default` branch accept `outcome` as `never`? What happens if a
+`{ type: "cancelled" }` variant is added without adding a new case?
+
+**Answer:** `assertNever` accepts only `never`, so when every union member is
+handled the remaining type is `never` and the call is valid. Adding `cancelled`
+makes the `assertNever` call fail the type check until the new variant is
+handled.
 
 ### Common beginner mistakes in Everyday Types
 
@@ -1125,7 +1497,7 @@ const number = input as number;
 only when the conversion rules are appropriate, or validate the value before
 using it as a number.
 
-#### Mistake 7: forgetting that an array lookup may be missing
+#### Mistake 7: assuming strict checking makes every array lookup safe
 
 ```ts
 function firstLetter(words: string[]): string {
@@ -1133,8 +1505,10 @@ function firstLetter(words: string[]): string {
 }
 ```
 
-An empty array makes `words[0]` undefined. A safer contract makes the result
-explicit:
+An empty array makes `words[0]` undefined at runtime. Ordinary `strict`
+checking does not necessarily add `undefined` to an indexed array result;
+`noUncheckedIndexedAccess` does. Write code that handles the runtime case
+regardless of that option:
 
 ```ts
 function firstLetter(words: string[]): string | undefined {
@@ -1142,7 +1516,9 @@ function firstLetter(words: string[]): string | undefined {
 }
 ```
 
-The return type tells callers that they must handle an empty input.
+The return type tells callers that they must handle an empty input. Do not
+change the repository compiler configuration merely to make this one example
+look safer.
 
 #### Mistake 8: assuming an interface exists at runtime
 
@@ -1181,6 +1557,32 @@ This removes the information that could have told you the value was malformed.
 Prefer a narrow input type for trusted data or `unknown` plus a check for
 external data.
 
+#### Mistake 11: assuming `readonly` freezes runtime data
+
+```ts
+const values = ["read", "write"];
+const view: readonly string[] = values;
+
+// view.push("preview"); // rejected through the readonly view
+values.push("preview");  // allowed through the mutable alias
+```
+
+`readonly` protects writes through one static view. It does not freeze the
+array or make every alias readonly. Use runtime copying or `Object.freeze` when
+runtime immutability is actually required.
+
+#### Mistake 12: using an assertion when `satisfies` or validation is needed
+
+```ts
+type Settings = { retries: number };
+const settings = { retries: "three" } as Settings;
+```
+
+The assertion suppresses the useful mismatch and does not convert the string.
+For a checked source literal, use `satisfies Settings` so the checker reports
+the error while preserving useful inference. For external data, use `unknown`
+plus a guard or runtime schema; neither assertion nor `satisfies` validates JSON.
+
 ### Read one complete function line by line
 
 Use this small function as a final Part 1 reading exercise:
@@ -1216,8 +1618,9 @@ Read it in the order a beginner should use when opening unfamiliar code:
 5. `options.width ?? 80` makes the local `width` a number.
 6. `slice` is safe because `title` was declared as a string.
 7. `truncated` is inferred as boolean because the comparison returns boolean.
-8. The return annotation is not written; TypeScript infers `DisplayResult` from
-   the function body.
+8. The explicit `: DisplayResult` return annotation checks that the returned
+   object has the documented shape and rejects an incompatible future change.
+   It does not convert the object at runtime.
 
 Try to predict the result of these calls:
 
@@ -1342,6 +1745,33 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 Prefer public entry points. A deep import into another package's internal
 source bypasses the boundary that published consumers use.
 
+A module can also export a default value or re-export a public name:
+
+```ts
+// register.ts
+export default function register(): void {
+  console.log("registered");
+}
+
+// index.ts
+export { default as register } from "./register.ts";
+export type { Pair } from "./math.ts";
+```
+
+A default import names the exported value locally:
+
+```ts
+import register from "./register.ts";
+import { register as namedRegister } from "./index.ts";
+```
+
+Top-level `import` or `export` makes a file a module. TypeScript then resolves
+relative paths and package names using the configured module-resolution mode.
+When a module error appears, check the relative path, `.ts` suffix convention,
+package `exports`, and public entry point before reaching for a deep import.
+CommonJS interop, namespaces, and `import =`/`export =` syntax are outside
+Pi's erasable ESM conventions.
+
 **Recognition note:** type-only cycles can sometimes be broken with
 `import type`; runtime cycles need a design review. You do not need to solve
 module cycles to read ordinary imports.
@@ -1393,7 +1823,29 @@ Pi uses this pattern for `AgentEvent`, message roles, content blocks, and
 session entries. Find the literal `type` or `role` values first, then read the
 branch that handles the value you care about.
 
-#### Next-level patterns
+#### User-defined predicates and exhaustive unions
+
+When a runtime check is reusable, a function can report its narrowing result with
+a type predicate. The `value is User` return type means that callers may treat
+`value` as `User` in the true branch:
+
+```ts
+type User = { name: string };
+
+function isUser(value: unknown): value is User {
+  return !!value && typeof value === "object" &&
+    "name" in value && typeof value.name === "string";
+}
+
+function displayUser(value: unknown): string {
+  if (!isUser(value)) return "invalid user";
+  return value.name.toUpperCase();
+}
+```
+
+The predicate must agree with the runtime test. It changes the checker's view;
+it does not validate anything by magic. TypeBox uses the same pattern with
+`Value.Check` later.
 
 An exhaustive `never` check asks the checker to report a newly added variant:
 
@@ -1401,11 +1853,23 @@ An exhaustive `never` check asks the checker to report a newly added variant:
 function assertNever(value: never): never {
   throw new Error(`Unexpected variant: ${String(value)}`);
 }
+
+type Result =
+  | { type: "ok"; value: string }
+  | { type: "error"; message: string };
+
+function resultLabel(result: Result): string {
+  switch (result.type) {
+    case "ok": return result.value;
+    case "error": return result.message;
+    default: return assertNever(result);
+  }
+}
 ```
 
-You will see this pattern in Pi, but you can understand most code without
-writing it yourself. Type predicates and nested unions are also useful later;
-first become comfortable with direct `if` and `switch` narrowing.
+If a new variant is added to `Result`, the `assertNever(result)` line stops
+being valid until the new case is handled. This is useful recognition-level
+knowledge for Pi event consumers.
 
 ### Functions as callbacks and closures
 
@@ -1475,9 +1939,58 @@ onSessionStart((_event, context) => {
 In real Pi code, `_event`, `_signal`, and `_ctx` commonly mean "this parameter
 is part of the contract, but this handler does not use it."
 
+A callback parameter should be optional only when the implementation may really
+call the callback without it:
+
+```ts
+function visit(
+  values: string[],
+  callback: (value: string, index?: number) => void,
+): void {
+  for (let index = 0; index < values.length; index += 1) {
+    callback(values[index], index);
+  }
+}
+```
+
+This signature promises that `callback` might receive no index, so a callback
+that uses `index` must handle `undefined`. If the implementation always passes
+an index, make it required instead:
+
+```ts
+function visitWithIndex(
+  values: string[],
+  callback: (value: string, index: number) => void,
+): void {
+  values.forEach(callback);
+}
+```
+
+#### Overload recognition
+
+An overloaded function exposes several allowed call shapes, followed by one
+implementation that handles them:
+
+```ts
+function formatValue(value: string): string;
+function formatValue(value: number): string;
+function formatValue(value: string | number): string {
+  return typeof value === "string" ? value : value.toFixed(2);
+}
+
+formatValue("ready");
+formatValue(3.14);
+```
+
+The implementation signature is not directly visible to callers. Prefer a
+union parameter instead of overloads when the alternatives have the same
+return shape and can be expressed clearly with one signature.
+
 **Recognition note:** a detached ordinary method can lose its `this` receiver.
-This matters in some Pi classes, but it is not required for the first reading
-of an extension callback.
+An arrow-function property captures the surrounding `this`, while a normal
+method receives its `this` from the call site. This matters when registering a
+class method as a callback; bind it or use an intentional wrapper when the
+receiver must be preserved.
 
 ### `unknown`, `any`, and external data
 
@@ -1530,6 +2043,115 @@ shared or exposed as a tool contract.
 
 **Checkpoint:** Which value is untrusted? What does `as` do? Why is the object
 returned by `readUser` safer than the original parsed value?
+
+### Generics and utility types
+
+#### Generic relationships
+
+A **generic** preserves a relationship between types selected when code is
+used. `T` is a type placeholder, not a runtime value:
+
+```ts
+function first<T>(items: readonly T[]): T | undefined {
+  return items[0];
+}
+
+const firstName = first(["Ada", "Grace"]);
+// string | undefined
+```
+
+The caller usually supplies `T` through inference. A constraint limits which
+values are allowed while preserving the relationship:
+
+```ts
+function longer<T extends { length: number }>(left: T, right: T): T {
+  return left.length >= right.length ? left : right;
+}
+
+const name = longer("Ada", "Grace"); // string
+const numbers = longer([1], [1, 2]);  // number[]
+// longer(1, 2); // error: numbers do not have length
+```
+
+Use a type parameter when it relates two or more positions, such as an input
+and its result. Do not add a generic that appears only once; a named interface
+or union is often clearer for a beginner-facing contract.
+
+#### Types from existing declarations
+
+TypeScript also lets one type refer to a runtime declaration without executing
+it. This is a different meaning of `typeof` from the runtime operator:
+
+```ts
+const defaultConfig = { retries: 3, mode: "read" } as const;
+type Config = typeof defaultConfig;
+// { readonly retries: 3; readonly mode: "read" }
+```
+
+`keyof` produces a union of the known property keys. Indexed access selects a
+property type using the same bracket shape used for JavaScript access:
+
+```ts
+type ConfigKey = keyof Config;       // "retries" | "mode"
+type RetryCount = Config["retries"]; // 3
+```
+
+For an array, `[number]` means the type of any element:
+
+```ts
+type Modes = ["read", "write"];
+type Mode = Modes[number]; // "read" | "write"
+```
+
+Read `Static<typeof UserSchema>` the same way: `typeof UserSchema` obtains the
+compile-time type of the runtime schema value, and `Static<...>` derives the
+schema's static value type. Neither operation validates data by itself.
+
+#### Selected utility types
+
+Utility types transform compile-time descriptions. They do not mutate, copy,
+freeze, validate, or convert runtime values:
+
+| Type | Meaning |
+|---|---|
+| `Partial<T>` | all properties optional |
+| `Required<T>` | all properties required |
+| `Readonly<T>` | top-level properties readonly |
+| `Pick<T, K>` | keep selected keys |
+| `Omit<T, K>` | remove selected keys |
+| `Record<K, V>` | map keys to values |
+| `ReturnType<typeof fn>` | function result type |
+| `Parameters<typeof fn>` | function argument tuple |
+| `Awaited<T>` | unwrap the eventual value of a Promise |
+| `Exclude<T, U>` | remove union members assignable to `U` |
+| `Extract<T, U>` | keep union members assignable to `U` |
+| `NonNullable<T>` | remove `null` and `undefined` |
+
+For example:
+
+```ts
+async function loadReport(): Promise<{ title: string; count: number }> {
+  return { title: "Build", count: 3 };
+}
+
+type Report = Awaited<ReturnType<typeof loadReport>>;
+type TitleOnly = Pick<Report, "title">;
+type Present = NonNullable<string | undefined>;
+```
+
+These names help you read Pi declarations. They do not add runtime checks to
+`loadReport` or create a `TitleOnly` object.
+
+#### Advanced type manipulation: recognize, do not design yet
+
+Conditional types act like type-level `if` expressions. Mapped types transform
+each property of an object type, and template-literal types build string
+literal types from other literals. They underpin many utility types and may
+appear in Pi aliases, but do not turn this foundations workbook into a type
+metaprogramming course. Follow the alias back to its inputs, then consult the
+Handbook pages for [conditional types](https://www.typescriptlang.org/docs/handbook/2/conditional-types.html),
+[mapped types](https://www.typescriptlang.org/docs/handbook/2/mapped-types.html),
+and [template literal types](https://www.typescriptlang.org/docs/handbook/2/template-literal-types.html).
 
 ## TypeBox as Pi's runtime validation bridge
 
@@ -1878,25 +2500,6 @@ These topics appear in Pi, but they are not part of the Everyday Types
 foundation. Read the short explanations, then return to the relevant source
 when you need to make a change.
 
-### Generics and utility types
-
-A **generic** preserves a relationship between types selected when code is
-used. `T` is a type placeholder, not a runtime value:
-
-```ts
-function first<T>(items: readonly T[]): T | undefined {
-  return items[0];
-}
-
-const firstName = first(["Ada", "Grace"]);
-// string | undefined
-```
-
-You may recognize `Partial<T>`, `Pick<T, K>`, `Omit<T, K>`, `Record<K, V>`,
-`ReturnType`, and `Parameters` in Pi. Do not design a complicated generic until
-an explicit relationship requires one. An explicit interface is often clearer
-for a beginner-facing contract.
-
 ### Promises, streams, and `AbortSignal`
 
 An `async` function returns a `Promise<T>`:
@@ -1938,8 +2541,22 @@ chapters.
 Use a class when several methods share state or the object owns a lifetime:
 
 ```ts
-class Runner {
-  private controller = new AbortController();
+interface Stoppable {
+  stop(): void;
+}
+
+class Runner implements Stoppable {
+  private readonly controller: AbortController;
+  private readonly name: string;
+
+  constructor(name: string) {
+    this.name = name;
+    this.controller = new AbortController();
+  }
+
+  get label(): string {
+    return this.name;
+  }
 
   stop(): void {
     this.controller.abort();
@@ -1947,13 +2564,34 @@ class Runner {
 }
 ```
 
-`private` is primarily a TypeScript visibility contract. `extends` creates
-runtime inheritance; `implements` checks that a class has the required shape.
-Pi source uses explicit fields rather than constructor parameter properties
-because its source must use erasable TypeScript syntax.
+The explicit fields and constructor assignment are intentional Pi style. A
+class field can be `public` (the default), `protected` (the class and its
+subclasses), or `private` (the declaring class). `readonly` prevents assignment
+through the type after initialization; it does not freeze the runtime object.
+A getter can expose a computed read-only view.
+
+`implements` checks that a class has a required shape; it does not add members
+to the class or change how its body is inferred. `extends` creates runtime
+inheritance, and a derived class must preserve the base class contract:
+
+```ts
+class TimedRunner extends Runner {
+  readonly timeoutMs: number;
+
+  constructor(name: string, timeoutMs: number) {
+    super(name);
+    this.timeoutMs = timeoutMs;
+  }
+}
+```
 
 The class that creates a controller, listener, timer, or process owns stopping
 or disposing it. Look for `stop()` and `dispose()` when reading lifecycle code.
+Pi uses explicit fields rather than constructor parameter properties because
+its source must use erasable TypeScript syntax. Abstract classes, static
+members, accessors with separate read/write types, and generic classes are
+recognition-only topics; do not design a class hierarchy until the runtime
+lifetime and contract require one.
 
 ## Apply the basics to Pi
 
@@ -2086,6 +2724,35 @@ variant and update its consumers.
 Pi source avoids constructor parameter properties, enums, and namespaces. Use
 explicit fields, literal unions, and ESM modules instead.
 
+#### Implicit `any`
+
+```ts
+function announce(message) {
+  return message.toUpperCase();
+}
+```
+
+With `noImplicitAny`, the unannotated parameter is an error. Add a meaningful
+parameter type or let contextual typing provide one at the call site; do not
+silence the error with `any`.
+
+#### Readonly assignment
+
+```ts
+const names: readonly string[] = ["Ada"];
+// names.push("Grace"); // Property 'push' does not exist
+```
+
+The value may be a normal mutable array at runtime. The error describes the
+readonly view available to this function.
+
+#### No overload matches
+
+When an overloaded function reports “No overload matches this call,” compare
+the arguments with each exposed overload signature. The hidden implementation
+signature does not automatically make every combination legal; narrow the
+value, choose a supported call shape, or revise the public overloads.
+
 ### Utility types to recognize
 
 These transform compile-time descriptions. They do not mutate, copy, freeze,
@@ -2101,6 +2768,10 @@ or validate runtime values.
 | `Record<K, V>` | map keys to values |
 | `ReturnType<typeof fn>` | function result type |
 | `Parameters<typeof fn>` | function argument tuple |
+| `Awaited<T>` | unwrap a Promise's eventual value |
+| `Exclude<T, U>` | remove selected union members |
+| `Extract<T, U>` | keep selected union members |
+| `NonNullable<T>` | remove `null` and `undefined` |
 
 ### Short glossary
 
@@ -2121,6 +2792,13 @@ or validate runtime values.
 | Schema | A runtime description of allowed data |
 | TypeBox | A library for building runtime schemas and derived static types |
 | `Static<typeof S>` | The compile-time type derived from schema `S` |
+| Tuple | An array type with fixed, position-specific elements |
+| Readonly | A compile-time restriction on writes through one type view |
+| Type predicate | A return type such as `value is User` that narrows a value |
+| `never` | A type with no possible values, useful for exhaustiveness |
+| `satisfies` | A compile-time compatibility check that preserves inference |
+| `keyof` | A type-level union of an object's known keys |
+| Type-position `typeof` | The compile-time type of an existing value |
 | Callback | A function passed to be called now or later |
 | Promise | One future fulfilled value or rejected error |
 | `AbortSignal` | A cancellation notification passed to work |
@@ -2186,7 +2864,9 @@ the files to include:
     "moduleResolution": "bundler",
     "strict": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "erasableSyntaxOnly": true,
+    "allowImportingTsExtensions": true
   },
   "include": ["src/**/*.ts"]
 }
