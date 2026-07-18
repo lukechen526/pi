@@ -291,7 +291,9 @@ import type {
 
 const addIssueCompletion = (previous: AutocompleteProvider): AutocompleteProvider => ({
   triggerCharacters: ["#"],
-  async getSuggestions(lines, cursorLine, cursorCol, _options): Promise<AutocompleteSuggestions | null> {
+  async getSuggestions(
+    lines, cursorLine, cursorCol, _options,
+  ): Promise<AutocompleteSuggestions | null> {
     const line = lines[cursorLine] ?? "";
     const beforeCursor = line.slice(0, cursorCol);
     const match = /(?:^|\s)(#[\w-]*)$/.exec(beforeCursor);

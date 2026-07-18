@@ -108,7 +108,7 @@ questions:
 ```{mermaid}
 %%| label: fig-static-vs-runtime
 %%| fig-cap: "Compile time checks and erases types; runtime executes values."
-flowchart LR
+flowchart TD
   subgraph compile["Compile time"]
     A[Write .ts] --> B[Type-check] --> C[Erase types] --> D[JavaScript]
   end
@@ -2087,9 +2087,9 @@ source bypasses the boundary that published consumers use.
 %%| label: fig-module-boundaries
 %%| fig-cap: "Three import paths: relative and package-name imports are allowed; deep imports into another package's source are not."
 flowchart TD
-  A["your code"] --> B["./file.ts relative, same package"]
-  A --> C["@earendil-works/... package name"]
-  A --> D["deep import into another package's source"]
+  A["your code"] --> B["./file.ts"]
+  A --> C["@earendil-works/..."]
+  A --> D["deep import"]
   B --> E["allowed"]
   C --> E
   D --> F["avoid"]
@@ -2302,7 +2302,7 @@ passes its return value instead of passing the function.
 ```{mermaid}
 %%| label: fig-callback-timeline
 %%| fig-cap: "Registration stores the callback; the owner invokes it later."
-flowchart LR
+flowchart TD
   A["caller registers callback"] --> B["registry stores it"]
   B --> C["time passes"]
   C --> D["owner emits event"]
@@ -3479,7 +3479,11 @@ it returns, excerpted from
 numbers shift, so search for `export function defineTool`):
 
 ```ts
-export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = unknown, TState = any> {
+export interface ToolDefinition<
+	TParams extends TSchema = TSchema,
+	TDetails = unknown,
+	TState = any,
+> {
 	name: string;
 	label: string;
 	description: string;
