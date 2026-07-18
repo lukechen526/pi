@@ -263,10 +263,10 @@ Use evidence appropriate to what you changed:
 7. For tools, test a malformed call/schema failure and a cancellation. For
    mutating tools, test concurrent sibling calls if applicable.
 8. If you change repository code, run `npm run check` and the relevant targeted
-   test rather than a real-provider test. The coding-agent suite uses a faux provider
-   under `packages/coding-agent/test/suite/harness.ts` for deterministic tests.
+   test rather than a real-provider test. The coding-agent suite uses a faux
+   provider and `test/suite/harness.ts` for deterministic tests.
 
-The repository ships extension examples in
+The repository ships extension examples in the directory
 `packages/coding-agent/examples/extensions/`. Start with the smallest match:
 
 - `hello.ts`: a tool

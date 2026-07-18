@@ -108,7 +108,7 @@ session, when one is available. In source it is `SessionHeader` from
 by `runPrintMode` before subscribed events, not a conversation entry.
 
 ```json
-{"type":"session","version":3,"id":"<session-uuid>","timestamp":"<iso-time>","cwd":"/work/project"}
+{"type":"session","version":3,"id":"<id>","timestamp":"<timestamp>","cwd":"/work/project"}
 ```
 
 Fields:
@@ -145,15 +145,12 @@ RPC mode keeps a process alive for command/request exchange. Start it with:
 pi --mode rpc [options]
 ```
 
-Implementation and types live under
-`packages/coding-agent/src/modes/rpc/`, with the host entry in
-`packages/coding-agent/src/modes/rpc/rpc-mode.ts`, framing in
-`packages/coding-agent/src/modes/rpc/jsonl.ts`, command/response types in
-`packages/coding-agent/src/modes/rpc/rpc-types.ts`, and a typed client in
-`packages/coding-agent/src/modes/rpc/rpc-client.ts`. The runtime and session still
-own model/tool state; RPC is a transport around that behavior, not an alternate
-agent implementation. The full command and event catalog is
-`packages/coding-agent/docs/rpc.md`.
+Implementation and types live under `packages/coding-agent/src/modes/rpc/`.
+The host entry is `rpc-mode.ts`, framing is `jsonl.ts`, command/response types
+are in `rpc-types.ts`, and the typed client is `rpc-client.ts`.
+The runtime and session still own model/tool state; RPC is a transport around
+that behavior, not an alternate agent implementation. The full command and
+event catalog is `packages/coding-agent/docs/rpc.md`.
 
 ### Framing and object shapes
 

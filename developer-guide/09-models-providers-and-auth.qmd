@@ -23,9 +23,12 @@ project-local config. Streaming is the adapter's delivery path for that
 protocol, not a separate product surface: adapters emit a normalized event
 stream that the agent consumes.
 
-Key source files are `packages/ai/src/types.ts`, `packages/ai/src/compat.ts`,
-`packages/ai/src/models.ts`, `packages/coding-agent/src/core/model-registry.ts`,
-and `packages/coding-agent/src/core/auth-storage.ts`.
+Key source files include:
+
+- `packages/ai/src/types.ts`, `packages/ai/src/compat.ts`, and
+  `packages/ai/src/models.ts`;
+- `packages/coding-agent/src/core/model-registry.ts`;
+- `packages/coding-agent/src/core/auth-storage.ts`.
 
 ## Vocabulary and a concrete comparison
 
@@ -262,9 +265,13 @@ set -euo pipefail
 cache="${XDG_CACHE_HOME:-$HOME/.cache}/pi/team-provider-token"
 max_age_seconds=300
 # macOS uses `stat -f %m`; GNU/Linux uses `stat -c %Y` for this timestamp.
-if [[ -f "$cache" ]] && [[ $(($(date +%s) - $(stat -f %m "$cache"))) -lt $max_age_seconds ]]; then
-  cat "$cache"
-  exit 0
+if [[ -f "$cache" ]]; then
+  now=$(date +%s)
+  modified=$(stat -f %m "$cache")
+  if (( now - modified < max_age_seconds )); then
+    cat "$cache"
+    exit 0
+  fi
 fi
 mkdir -p "$(dirname "$cache")"
 security find-generic-password -ws team-provider | tee "$cache"

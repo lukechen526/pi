@@ -44,7 +44,7 @@ with an `id` and `parentId`. One file can represent both paths.
 
 ```text
 Session file:
-  header  (metadata only: type=session, version, id, cwd (current working directory), optional parentSession)
+  header  (metadata: type=session, version, id, cwd, optional parentSession)
           # not a tree node; has no parentId and is never selected as a leaf
 
 Entry tree (linked only by entry parentId values):
@@ -90,7 +90,7 @@ Each persisted session is a `.jsonl` file. Its first line is a file header, for
 example:
 
 ```json
-{"type":"session","version":3,"id":"<session-uuid>","timestamp":"<iso-time>","cwd":"/work/project","parentSession":"<optional-source-file>"}
+{"type":"session","version":3,"id":"<id>","timestamp":"<timestamp>","cwd":"/work/project"}
 ```
 
 The header's `id` identifies the session, not a node. Unlike every subsequent

@@ -107,7 +107,7 @@ second run when one is active. Because `prompt()` is async, the call returns a
 rejected promise:
 
 ```text
-Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.
+Agent is already processing a prompt. Use steer() or followUp(), or wait for completion.
 ```
 
 The rejection occurs before normalization, event emission, or transcript
