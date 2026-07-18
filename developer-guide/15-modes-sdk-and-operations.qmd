@@ -108,7 +108,7 @@ session, when one is available. In source it is `SessionHeader` from
 by `runPrintMode` before subscribed events, not a conversation entry.
 
 ```json
-{"type":"session","version":3,"id":"<id>","timestamp":"<timestamp>","cwd":"/work/project"}
+{"type":"session","version":3,"id":"<id>","timestamp":"<ts>","cwd":"/proj"}
 ```
 
 Fields:

@@ -160,7 +160,7 @@ and declare them as peer dependencies when Pi bundles them at runtime.
 The normal interactive prompt path crosses these packages:
 
 | Source package | Published package | Role | Start reading at |
-|---|---|---|---|
+|-------------------------|-------------------------------------|---------------|--------------------|
 | `packages/tui` | `@earendil-works/pi-tui` | Reusable terminal UI primitives and differential rendering | `src/index.ts`, `src/tui.ts` |
 | `packages/ai` | `@earendil-works/pi-ai` | Models, provider dispatch, streaming API adapters, authentication | `src/index.ts`, `src/types.ts` |
 | `packages/agent` | `@earendil-works/pi-agent-core` | Provider-independent agent loop, message state, tool execution | `src/agent.ts`, `src/agent-loop.ts`, `src/types.ts` |

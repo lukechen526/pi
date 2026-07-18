@@ -135,7 +135,7 @@ adjust the message list, and then converts the result into the exact format the
 provider API expects.
 
 | Boundary | Owner in the runtime | What it produces |
-|---|---|---|
+|----------------|------------------------------------------|-------------------------------|
 | Base system-prompt assembly | `AgentSession._rebuildSystemPrompt()` and `buildSystemPrompt()` | System-prompt text from cwd, context files, skills, prompts, and active-tool guidance |
 | Extension context transform | `Agent`'s `transformContext` callback, wired to the extension `context` event | An adjusted `AgentMessage[]` list before provider conversion |
 | LLM/provider conversion | `convertToLlm()` followed by `streamFn`/`streamSimple()` | A provider-compatible `Context`, then the provider's assistant event stream |
