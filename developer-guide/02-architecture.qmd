@@ -32,13 +32,15 @@ JSON does not belong in the TUI.
 
 ## Dependency direction
 
-```text
-Dependent package                         -> Direct runtime dependency
-packages/orchestrator (experimental)      -> packages/coding-agent
-packages/coding-agent                     -> packages/tui
-packages/coding-agent                     -> packages/agent
-packages/coding-agent                     -> packages/ai
-packages/agent                            -> packages/ai
+```{mermaid}
+%%| label: fig-dependency-direction
+%%| fig-cap: "Runtime dependency direction. An arrow points from a package to the package it imports; lower layers never import higher ones."
+flowchart TD
+  O["orchestrator (experimental)"] --> CA["coding-agent"]
+  CA --> TUI["tui"]
+  CA --> AG["agent"]
+  CA --> AI["ai"]
+  AG --> AI
 ```
 
 Each arrow points from the package that imports and depends on another package
