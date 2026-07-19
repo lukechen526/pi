@@ -21,6 +21,28 @@ point** is the file where a feature or application begins. A **boundary** is a
 place where one representation becomes another, such as a provider message
 becoming an agent event.
 
+```{mermaid}
+%%| label: fig-package-map
+%%| fig-cap: "The package map. An arrow points from a package to the package it imports; lower layers never import higher ones."
+flowchart TD
+  O["orchestrator<br/>(experimental)"] --> CA
+  CA["coding-agent<br/>CLI, sessions, tools, extensions"]
+  TUI["tui<br/>terminal primitives"]
+  AG["agent<br/>generic tool loop"]
+  AI["ai<br/>provider contract"]
+  CA --> TUI
+  CA --> AG
+  CA --> AI
+  AG --> AI
+```
+
+Each arrow points from the package that imports and depends on another package
+to that dependency; the map shows the normal architectural direction, not every
+development-tool dependency. `coding-agent` integrates all lower layers and
+depends directly on each of them; `agent` also depends on the AI
+message/model contracts. `tui` has no dependencies on other packages in this
+monorepo, allowing it to be reused by other terminal applications.
+
 For a beginner-readable boundary example, follow a `/hello-pi` command. The
 command is registered by an extension in `coding-agent`, its handler may call
 coding-agent session/UI APIs, and the resulting model request still crosses the
@@ -29,26 +51,6 @@ start in `tui`; if it changes provider JSON, start in `ai`; if it changes the
 generic tool loop, start in `agent`. The direction tells you where a fix
 belongs: a terminal component does not belong in `packages/agent`, and provider
 JSON does not belong in the TUI.
-
-## Dependency direction
-
-```{mermaid}
-%%| label: fig-dependency-direction
-%%| fig-cap: "Runtime dependency direction. An arrow points from a package to the package it imports; lower layers never import higher ones."
-flowchart TD
-  O["orchestrator (experimental)"] --> CA["coding-agent"]
-  CA --> TUI["tui"]
-  CA --> AG["agent"]
-  CA --> AI["ai"]
-  AG --> AI
-```
-
-Each arrow points from the package that imports and depends on another package
-to that dependency. The list shows the normal architectural direction, not
-every development-tool dependency. `coding-agent` integrates all lower layers
-and depends directly on each of them; `agent` also depends on the AI
-message/model contracts. `tui` has no dependencies on other packages in this
-monorepo, allowing it to be reused by other terminal applications.
 
 ## Repository-level conventions
 
@@ -75,6 +77,11 @@ change, run `quarto render developer-guide` from the repository root;
 
 ### `packages/tui`: terminal rendering primitives
 
+**You work here when** a change is a general terminal interaction primitive —
+layout, focus, key parsing, editor components — that any terminal app could
+reuse. For a Pi-specific chat row, command, or tool renderer, start in
+coding-agent instead.
+
 `packages/tui/src/index.ts` is the public barrel (a file that re-exports
 symbols from other modules). It exports the `TUI` class,
 the `Component` interface, containers, text/editor/list components, terminal
@@ -88,10 +95,11 @@ specific UI pieces; `src/keybindings.ts`, `src/keys.ts`, and the editor
 components handle keyboard semantics. This package does not know what a model,
 tool call, session, or extension is.
 
-Use this layer when a change is a general terminal interaction primitive. For a
-Pi-specific chat row, command, or tool renderer, start in coding-agent instead.
-
 ### `packages/ai`: a provider-neutral streaming contract
+
+**You work here when** a change is protocol-specific JSON, streaming parsing,
+or a provider quirk. UI decisions and built-in filesystem tools do not belong
+in this package.
 
 The small public entry point `packages/ai/src/index.ts` exports core types,
 models, authentication utilities, event-stream helpers, TypeBox, and selected
@@ -116,11 +124,11 @@ provider registration and routes model requests. Individual files such as
 the normalized context into a provider request and translate that provider's
 stream back into Pi events.
 
-Provider adapters are the right place for protocol-specific JSON, streaming
-parsing, or provider quirks. Do not put a UI decision or a built-in filesystem
-tool in this package.
-
 ### `packages/agent`: generic conversation and tool loop
+
+**You work here when** a change is a loop rule that must hold for every
+consumer of the agent runtime — event ordering, tool scheduling, queue
+semantics — independent of Pi's CLI or sessions.
 
 `packages/agent/src/types.ts` declares the generic agent contract: agent
 messages, tools, events, loop configuration, hooks, queue modes, and tool
@@ -144,6 +152,9 @@ The generic loop deliberately receives callbacks such as `convertToLlm`,
 dependency on `SessionManager`, local disk tools, or the interactive TUI.
 
 ### `packages/coding-agent`: the Pi application
+
+**You work here when** a change is Pi application behavior: a command, session
+policy, built-in tool, setting, or the extension API itself.
 
 This is where the generic pieces become the `pi` command. Its package manifest
 defines the `pi` binary as `dist/cli.js`. In source,
@@ -184,6 +195,9 @@ documented for that purpose.
 
 ### `packages/orchestrator`: experimental process orchestration
 
+**You work here when** a change concerns multi-process orchestration, not
+normal prompt processing. This package is experimental.
+
 `packages/orchestrator` depends on coding-agent and exports configuration,
 handlers, IPC client/server/protocol, process supervision, storage, and serve
 functions from `src/index.ts`. Its manifest describes it as experimental.
@@ -193,17 +207,20 @@ step of normal prompt processing.
 ## Constructing a running coding-agent session
 
 The startup path is intentionally split so the runtime can be rebuilt when a
-session changes its working directory.
+session changes its working directory:
 
-```text
-main.ts
-  -> createAgentSessionRuntime(...)
-      -> createAgentSessionServices(...)
-          SettingsManager + AuthStorage + ModelRegistry + DefaultResourceLoader
-      -> createAgentSessionFromServices(...)
-          -> createAgentSession(...) in core/sdk.ts
-              -> Agent + AgentSession + built-in/custom tool registry
-  -> InteractiveMode | runRpcMode | runPrintMode
+```{mermaid}
+%%| label: fig-startup-path
+%%| fig-cap: "Startup construction. Services are built first, the session wraps an Agent around them, then one of the three run modes takes over."
+flowchart TD
+  M["main.ts"] --> R["createAgentSessionRuntime()"]
+  R --> S["createAgentSessionServices()<br/>settings, auth, model registry,<br/>resource loader"]
+  S --> FS["createAgentSessionFromServices()"]
+  FS --> C["createAgentSession()<br/>in core/sdk.ts"]
+  C --> A["Agent + AgentSession<br/>+ tool registry"]
+  A --> I["InteractiveMode"]
+  A --> RPC["runRpcMode"]
+  A --> P["runPrintMode"]
 ```
 
 `createAgentSessionServices()` reloads the resource loader and applies provider
@@ -239,7 +256,20 @@ user-facing policy and session entries.
 
 ## Where to make a change
 
-Use the narrowest layer that truthfully owns the behavior:
+**In plain terms:** find the narrowest layer that truthfully owns the behavior.
+The decision tree answers the common cases; the table below it is the reference.
+
+```{mermaid}
+%%| label: fig-where-to-change
+%%| fig-cap: "Where a change belongs. Code changes go to the owning layer; everything else is a resource or an extension."
+flowchart TD
+  Q{"what kind of<br/>change?"} -->|"configuration"| NC["settings, skill,<br/>theme, prompt"]
+  Q -->|"behavior, without<br/>patching Pi"| EXT["extension"]
+  Q -->|"Pi itself"| Q2{"which layer?"}
+  Q2 --> L["tui — terminal primitive<br/>ai — provider protocol<br/>agent — generic loop rule<br/>coding-agent — Pi behavior"]
+```
+
+The full reference table:
 
 | Desired change | Discriminator | First place to investigate |
 |---|---|---|

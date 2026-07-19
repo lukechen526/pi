@@ -37,21 +37,34 @@ then answer. The path below explains what stays the same in both examples.
 
 ## The complete path
 
-```text
-Editor Enter
-  -> InteractiveMode.getUserInput()
-  -> AgentSession.prompt(text)
-      -> extension command / input preprocessing / prompt expansion
-      -> user + extension custom messages
-      -> Agent.prompt(messages)
-          -> agentLoop
-              -> transform context -> convert messages -> provider stream
-              -> assistant stream events -> tool validation/execution
-              -> tool-result messages -> repeat or finish
-      -> session persistence + extension events + transcript rendering
+**In plain terms:** your text travels from the editor, through interception and
+context construction, to the provider, and back through streaming events, tool
+execution, and persistence. The map below is the whole chapter in one picture;
+each stage section then zooms in. As a running example, picture the prompt
+`"Read the config and fix the failing test"`: it produces several turns because
+the model calls `read`, then `bash`, then answers.
+
+```{mermaid}
+%%| label: fig-prompt-lifecycle-overview
+%%| fig-cap: "The complete interactive prompt path. Stages 1-2 happen before any model work; stages 6-8 repeat once per turn; stages 9-10 settle the run."
+flowchart TD
+  S1["1-2. Input and interception"]
+  S3["3. Turn construction"]
+  S45["4-5. Context and dispatch"]
+  S6["6. Streaming events"]
+  S7["7. Tool execution"]
+  S8{"8. Another turn?"}
+  S9["9-10. Persistence<br/>and settlement"]
+  S1 --> S3 --> S45 --> S6 --> S7 --> S8
+  S8 -->|"yes"| S45
+  S8 -->|"no"| S9
 ```
 
 ## Stage 1: Terminal input enters the TUI
+
+**In plain terms:** pressing Enter hands your text to the session; pressing it
+while the model is still working queues the text for a later turn instead of
+interrupting.
 
 `InteractiveMode` owns the coding-agent's interactive screen. Its editor
 submission handler recognizes built-in slash commands and `!`/`!!` user-shell
@@ -76,7 +89,14 @@ The initial prompt supplied by command-line arguments travels through the same
 `InteractiveMode`, but they converge on `AgentSession` rather than
 reimplementing the provider path.
 
+**Why an extension author cares:** steering and follow-up are the same queue
+modes you select with `sendUserMessage(text, { deliverAs: "steer" | "followUp" })`
+— input you inject rides the boundaries described here.
+
 ## Stage 2: Commands, keybindings, and input interception
+
+**In plain terms:** before your text becomes a prompt, Pi gives two command
+systems and every extension a chance to claim or rewrite it.
 
 There are two distinct command systems:
 
@@ -102,7 +122,15 @@ for ordinary text and unclaimed slash text. An extension that wants to
 intercept a skill invocation must use `input`; one that wants a durable custom
 command should use `registerCommand`, not parse slash text manually.
 
+**Why an extension author cares:** this stage decides which interception point
+is yours — `registerCommand()` for a new slash command, the `input` event for
+transforming or handling ordinary text.
+
 ## Stage 3: Agent-session orchestration constructs a turn
+
+**In plain terms:** the session validates that a run can start, gathers your
+message plus any buffered extension messages, notifies extensions that a run is
+beginning, and hands everything to the generic agent loop.
 
 `AgentMessage` is the agent-core union of provider-compatible LLM `Message`
 values and application-defined custom message types. That lets the session
@@ -127,6 +155,10 @@ flushes pending user-bash messages, and emits `agent_settled`.
 The `Agent` owns the abort controller, streaming state, accumulated messages,
 active tools, and queues. `Agent.prompt()` snapshots its state and starts
 `runAgentLoop()`.
+
+**Why an extension author cares:** `before_agent_start` is your last chance to
+add messages or override the system prompt before the loop takes over;
+`agent_settled` is the signal that all follow-up work is done.
 
 ## Stage 4: Context and system prompt cross three construction boundaries
 
@@ -183,7 +215,14 @@ passes the *already* snapshotted model together with that normalized context.
 Provider dispatch (Stage 5) resolves credentials and an adapter for that model;
 context construction only prepares the adapter input.
 
+**Why an extension author cares:** the `context` event is where you reshape the
+message list the model is about to see — per request, not just at run start.
+
 ## Stage 5: Provider dispatch for the already-chosen model
+
+**In plain terms:** the loop hands the normalized context and the chosen model
+to a small dispatch function, which adds credentials and headers and picks the
+provider adapter that speaks the vendor's wire protocol.
 
 This stage charts the coding-agent stream path from the snapshotted `Model` to a
 provider adapter. Model *catalog* selection and runtime changes belong to
@@ -219,6 +258,22 @@ assistant request the path is:
 credential lookup, OAuth state, and header sources used by step 2; its role in
 this stage is auth/header resolution for the chosen model, not model selection.
 
+The sequence below summarizes stages 3-6 for one turn of the running example:
+
+```{mermaid}
+%%| label: fig-turn-sequence
+%%| fig-cap: "One turn across stages 3-6: turn construction, context conversion, provider dispatch, and the event stream back to the session."
+flowchart TD
+  N1["Editor -> Session:<br/>prompt(text)"]
+  N2["Session -> Extensions:<br/>before_agent_start"]
+  N3["Session -> Agent loop:<br/>prompt(messages)"]
+  N4["Agent loop: context event,<br/>then convertToLlm()"]
+  N5["Agent loop -> Provider:<br/>streamSimple"]
+  N6["Provider --> Agent loop --> Session:<br/>stream becomes message events"]
+  N7["Agent loop: tool_call gate, execute tools,<br/>toolResult --> Session"]
+  N1 --> N2 --> N3 --> N4 --> N5 --> N6 --> N7
+```
+
 Scope boundary for this chapter: the numbered path stops at adapter
 `streamSimple` and the three provider-extension insertion points. Vendor wire
 formats, transport negotiation, custom provider registration, and auth-storage
@@ -230,7 +285,16 @@ hooks are not substitutes for a custom provider; use `pi.registerProvider()`
 when you must declare a model catalog, endpoint, auth, or streaming
 implementation.
 
+**Why an extension author cares:** the header/payload hooks
+(`before_provider_headers`, `before_provider_request`,
+`after_provider_response`) fire inside this stage, in the order shown in the
+turn diagram above.
+
 ## Stage 6: Streaming response becomes agent events and TUI updates
+
+**In plain terms:** the provider's partial replies are consumed chunk by chunk
+and republished as Pi's own events; the transcript you see typing out is those
+events being rendered.
 
 `streamAssistantResponse()` consumes the `AssistantMessageEventStream` with
 `for await`: this is the async-iteration boundary where provider deltas become
@@ -256,7 +320,15 @@ queue semantics, [Built-in tools](#sec:tools) for tool contracts,
 recovery](#sec:failure) for recovery behavior. This chapter keeps only the
 end-to-end trace.
 
+**Why an extension author cares:** `message_start`/`message_update`/
+`message_end` and the turn events are how you observe model output live — for
+example to stream progress into custom UI.
+
 ## Stage 7: Tool calls are parsed, validated, gated, and executed
+
+**In plain terms:** when the model asks to run tools, Pi checks each request
+against the tool's schema, lets extensions veto or modify it, executes it, and
+appends the result where the model can see it.
 
 After a final assistant message, `agent-loop.ts` filters content blocks whose
 `type` is `"toolCall"`. A `"length"` stop means the token limit cut off the
@@ -296,32 +368,48 @@ Custom filesystem-mutating tools must participate in
 parallel; the [Built-in tools](#sec:tools) chapter has the runnable queue
 skeleton.
 
+**Why an extension author cares:** the `tool_call` event is your safety gate
+(veto or rewrite arguments before execution) and `tool_result` lets you patch
+what the model sees afterwards.
+
 ## Stage 8: Results create the next agent action
+
+**In plain terms:** tool results go back to the model; final text ends the turn
+unless someone — you, via steering or follow-up — has queued more to say.
 
 Each final tool result is appended to the in-memory agent context and becomes
 the model-facing material for the next turn. If at least one tool call was
 executed and the batch was not explicitly terminating, the loop starts another
 assistant response. If the model instead returns ordinary final text, the loop
 checks steering messages first and follow-up messages when it would otherwise
-stop.
+stop:
 
-The control flow is easier to read as four numbered decisions:
-
-1. Append each finalized `toolResult` to the in-memory context.
-2. If the batch has tool calls and is not explicitly terminating, send the
-   updated context to the model for another assistant response.
-3. If the assistant returns final text, drain steering first; when no tool calls
-   or steering remain, poll follow-up messages before stopping.
-4. If neither queue supplies work, emit `agent_end`; session-level retries,
-   compaction, and queued continuation may still occur above this low-level
-   boundary.
+```{mermaid}
+%%| label: fig-next-action
+%%| fig-cap: "After a toolResult is appended, the loop decides what happens next. Queued steering beats follow-up; an empty loop emits agent_end."
+flowchart TD
+  Q1{"tool calls and<br/>not terminating?"}
+  Q1 -->|"yes"| NT["next model turn"]
+  Q1 -->|"no"| Q2{"steering queued?"}
+  Q2 -->|"yes"| NT
+  Q2 -->|"no"| Q3{"follow-up queued?"}
+  Q3 -->|"yes"| NT
+  Q3 -->|"no"| END["agent_end"]
+```
 
 A tool can return `terminate: true` to hint that the next model call should be
 skipped, but the batch terminates only when every finalized tool result sets
 that flag. A tool signals failure by throwing; merely returning a field named
 `isError` does not mark it failed.
 
+**Why an extension author cares:** messages you queued with
+`deliverAs: "steer"` or `"followUp"` are drained here, in that priority order.
+
 ## Stage 9: Persistence and transcript updates settle the turn
+
+**In plain terms:** everything that happened is appended to the durable session
+file and, in parallel, to the on-screen transcript; custom UI renderers only
+change the screen, never the model loop.
 
 As message events complete, `AgentSession` records them through its
 `SessionManager`. The session is a JSONL tree, so the persisted form can later
@@ -337,7 +425,29 @@ custom messages, entries, or tool calls/results without changing how the model
 loop works. This chapter stops at that event-to-component boundary; the title
 intentionally does not promise terminal rendering internals.
 
+**Why an extension author cares:** `appendEntry()` persists your state without
+polluting model context, and renderer registration controls how your custom
+messages and entries look on screen.
+
 ## Stage 10: Errors, cancellation, retries, compaction, and shutdown
+
+**In plain terms:** a run can fail, be cancelled, retry, compact, and finally
+settle; `agent_end` only means the loop stopped, while `agent_settled` means
+nothing automatic is left to do.
+
+```{mermaid}
+%%| label: fig-run-lifecycle
+%%| fig-cap: "Run lifecycle. Retries and compaction resume the run; agent_end fires when the loop stops, agent_settled when no automatic continuation remains."
+stateDiagram-v2
+  running: running
+  running --> retrying: provider error
+  running --> compacting: context too large
+  retrying --> running
+  compacting --> running
+  running --> ended: agent_end
+  ended --> settled: agent_settled<br/>no retry or queue left
+  running --> aborted: Esc / abort signal
+```
 
 The low-level loop deliberately separates provider failures from tool
 failures: a provider error or abort ends the run with an assistant message,
@@ -354,6 +464,10 @@ low-level loop stopped. `agent_settled` is later: Pi has no automatic retry,
 compaction retry, or queued continuation left. Status integrations and cleanup
 that require true idleness should use `agent_settled` or `ctx.waitForIdle()` in
 a command context.
+
+**Why an extension author cares:** honor the abort signal in your own async
+work, clean up session-bound resources on `session_shutdown`, and use
+`agent_settled` (not `agent_end`) when you need true idleness.
 
 ## Trace this yourself
 
