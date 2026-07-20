@@ -10,16 +10,30 @@ grounded in `packages/coding-agent/src/core/settings-manager.ts`,
 `src/core/resource-loader.ts`, and `src/core/trust-manager.ts`; the user-facing
 reference is `packages/coding-agent/docs/settings.md`.
 
+## A day-one scenario
+
+You want three things from Pi in one repository: use a cheaper model here, load
+your team's review skill, and run a lint gate before the agent edits files.
+Each maps to a different mechanism:
+
+- Cheaper model → a **setting** (`defaultModel` in `.pi/settings.json`).
+- Review skill → a **resource** (a `SKILL.md` file Pi discovers).
+- Lint gate → an **extension** (code that runs at a lifecycle boundary).
+
+The rest of this chapter defines these terms precisely and shows where each
+file lives.
+
 ## The four words to keep separate
 
-A **resource** is something Pi discovers at startup, such as a skill, prompt,
-theme, or extension. A **setting** is configuration that changes how Pi runs.
-**Trust** is the decision that permits project-local code or settings to load.
-A **scope** is where a value applies, usually global or project-local.
+A **resource** is something Pi discovers at startup, such as the review skill
+above, or a prompt, theme, or extension. A **setting** is configuration that
+changes how Pi runs, such as `defaultModel`. **Trust** is the decision that
+permits project-local code or settings to load. A **scope** is where a value
+applies, usually global or project-local.
 
-For example, a project prompt file supplies instructions, a project extension
-can execute code, and a project setting can enable either one. They may arrive
-from the same package directory, but they do not have the same power or trust
+In the scenario, the skill supplies instructions, the lint-gate extension
+executes code, and `.pi/settings.json` enables both. They may arrive from the
+same package directory, but they do not have the same power or trust
 requirements.
 
 ## Global and project settings
@@ -30,6 +44,13 @@ Pi reads JSON settings from two conventional scopes:
 |---|---|---|
 | `~/.pi/agent/settings.json` | All projects for the current user | `~/.pi/agent` |
 | `.pi/settings.json` | The current project | `.pi` |
+
+The global file holds your personal defaults: they follow you into every
+project. The project file belongs to the repository and can be committed, so
+teammates get the same model choice, resources, and extensions on checkout.
+Because project-local settings and code come from the repository author rather
+than from you, Pi gates them behind a trust decision; see
+[Trust is an execution policy, not a cosmetic prompt](#sec:trust) below.
 
 Project values take precedence over global values. For a top-level
 object-valued setting, `deepMergeSettings()` combines the global and project
@@ -67,6 +88,35 @@ the project settings directory), and the
 empty project `skills` array deliberately clears the global skill list. Because
 `themes` is omitted from the project file, the global theme array remains. Use
 an omitted array to inherit and an explicit array—including `[]`—to replace.
+
+::: {.callout-warning}
+A project `"extensions": []` (or any explicit array) wipes the global list for
+that setting. To keep global extensions active in a project, restate them in
+the project array or omit the key entirely.
+:::
+
+The one-level merge also has a floor: nested objects inside an object-valued
+setting replace wholesale. Only the setting's top-level properties merge.
+For example, `retry.provider` is an object inside the `retry` object:
+
+```json
+// ~/.pi/agent/settings.json (global)
+{ "retry": { "maxRetries": 5, "provider": { "maxRetries": 2, "baseDelayMs": 500 } } }
+
+// .pi/settings.json (project)
+{ "retry": { "provider": { "maxRetries": 0 } } }
+```
+
+The effective `retry` is `{ "maxRetries": 5, "provider": { "maxRetries": 0 } }`:
+`maxRetries` merges at the top level of `retry`, but the project `provider`
+object replaces the global one, so `baseDelayMs` is lost. Restate nested
+fields you still need.
+
+When a merged value surprises you, work from the effective value back to its
+source. In interactive mode, `/settings` shows the current effective values
+for common settings; then compare `~/.pi/agent/settings.json` and
+`.pi/settings.json` to see which scope set a value. Remember that a value
+absent from the project file may still be the global one winning by omission.
 
 ## Settings that alter runtime behavior
 
@@ -179,7 +229,67 @@ skills, prompts, and context files shape model behavior. When instructions are
 enough, do not replace them with an extension that receives the Pi process's
 permissions.
 
-## Trust is an execution policy, not a cosmetic prompt
+## Authoring skills, prompts, and themes
+
+Skills, prompt templates, and themes are plain files you can write yourself;
+no build step or registration call is required. Drop the file in a discovery
+directory and Pi picks it up at startup (global: `~/.pi/agent/…`; project:
+`.pi/…`, loaded only after the project is trusted).
+
+A **skill** is a Markdown file with frontmatter. A directory containing
+`SKILL.md` is a skill root; direct `.md` files under `~/.pi/agent/skills/` or
+`.pi/skills/` also load. The `description` field is required; `name` defaults
+to the parent directory name.
+
+```markdown
+---
+description: Review staged changes for bugs and security issues
+---
+Review the staged changes (`git diff --cached`).
+Report bugs, security issues, and error-handling gaps.
+Do not modify files; report findings only.
+```
+
+Save as `.pi/skills/review/SKILL.md` (or `~/.pi/agent/skills/review.md`) and it
+becomes available as `/skill:review` and in system-prompt skill listings.
+
+A **prompt template** is a Markdown file in `~/.pi/agent/prompts/` or
+`.pi/prompts/`; the filename becomes the `/name` command, and `$1`, `$@`, or
+`$ARGUMENTS` placeholders receive typed arguments.
+
+```markdown
+---
+description: Summarize this week's merged PRs
+argument-hint: "[author]"
+---
+Summarize the PRs merged this week. Filter by author: $1.
+List each PR's intent and risk in one line.
+```
+
+Save as `.pi/prompts/week.md` and invoke as `/week alice`.
+
+A **theme** is a JSON file in `~/.pi/agent/themes/` or `.pi/themes/`. It has a
+`name`, optional `vars` aliases, and a `colors` object. Every color token in
+`theme-schema.json` is required, so the practical starting point is a copy of
+the built-in `dark.json` with values changed:
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "name": "team-dark",
+  "vars": { "brand": "#00aaff" },
+  "colors": {
+    "accent": "brand",
+    "border": "brand"
+  }
+}
+```
+
+The example is truncated for space; a real file must define all required
+`colors` tokens or validation rejects it. Select it with `"theme": "team-dark"`
+or via `/settings`.
+
+## Trust is an execution policy, not a cosmetic prompt {#sec:trust}
 
 Repository-owned settings can select extensions and packages; skills can direct
 the model to run commands. Pi therefore asks for trust before it loads project

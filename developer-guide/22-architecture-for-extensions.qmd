@@ -16,8 +16,15 @@ Start with the package map, then follow the startup diagram, and only then read
 the package walkthrough. A **package** is a deployable unit with its own public
 exports. A **dependency** is a package another package imports. An **entry
 point** is the file where a feature or application begins. A **boundary** is a
-place where one representation becomes another, such as a provider message
-becoming an agent event.
+place where one representation becomes another, such as a provider (an external
+model API such as Anthropic or OpenAI) message becoming an agent event.
+
+Five packages exist so that the terminal UI, the agent loop, and the
+provider code can each be reused and tested without the others: `tui` knows
+nothing about models, `agent` knows nothing about the CLI, and `ai` knows
+nothing about sessions. As an extension author you mainly need three of them:
+`coding-agent` is your home, `agent` is the loop your prompts run through, and
+`ai` is where model requests end up. `tui` and `orchestrator` can wait.
 
 ```{mermaid}
 %%| label: fig-package-map
@@ -39,20 +46,62 @@ to that dependency; the map shows the normal architectural direction, not every
 development-tool dependency. `coding-agent` integrates all lower layers and
 depends directly on each of them; `agent` also depends on the AI
 message/model contracts. `tui` has no dependencies on other packages in this
-monorepo, allowing it to be reused by other terminal applications.
+monorepo (a single repository containing several separately published
+packages), allowing it to be reused by other terminal applications.
 
-For a beginner-readable boundary example, follow a `/hello-pi` command. The
-command is registered by an extension in `coding-agent`, its handler may call
-coding-agent session/UI APIs, and the resulting model request still crosses the
-agent loop into provider-neutral `ai`. If the change is only terminal layout,
-start in `tui`; if it changes provider JSON, start in `ai`; if it changes the
-generic tool loop, start in `agent`. The direction tells you where a fix
-belongs: a terminal component does not belong in `packages/agent`, and provider
-JSON does not belong in the TUI.
+For a beginner-readable boundary example, follow a `/hello-pi` slash command
+from keystroke to provider request. The command is hypothetical, but every
+step names the real file that handles it:
+
+1. **Input.** You type `/hello-pi world` in the interactive mode
+   (`packages/coding-agent/src/modes/interactive/interactive-mode.ts`), which
+   passes the text to `AgentSession.prompt()`.
+2. **Command dispatch.** `AgentSession.prompt()`
+   (`packages/coding-agent/src/core/agent-session.ts`) sees the leading `/`
+   and calls `_tryExecuteExtensionCommand()`, which asks the
+   `ExtensionRunner` for a command named `hello-pi`. Extensions register
+   slash commands with `pi.registerCommand()`
+   (see `packages/coding-agent/examples/extensions/commands.ts`); the
+   command's `handler(args, ctx)` runs with a session context.
+3. **Session API.** The handler calls session APIs — for example
+   `pi.sendUserMessage("Say hello to world")`
+   (see `packages/coding-agent/examples/extensions/send-user-message.ts`),
+   which re-enters `AgentSession.prompt()` and starts a model turn.
+4. **Agent loop.** The turn runs in `packages/agent/src/agent-loop.ts`:
+   agent messages are converted to LLM messages via `convertToLlm`, a
+   provider `Context` is built, and the loop calls its stream function —
+   `streamSimple()` by default.
+5. **AI dispatch.** `streamSimple()` in `packages/ai/src/compat.ts` resolves
+   the API implementation from `model.api` via the api-registry.
+6. **Provider request.** The resolved module — for example
+   `packages/ai/src/api/anthropic-messages.ts` — serializes the `Context`
+   into that provider's JSON, sends the HTTP request, and translates the
+   response stream back into provider-neutral Pi events.
+
+```{mermaid}
+%%| label: fig-hello-pi-trace
+%%| fig-cap: "The /hello-pi trace. Each arrow crosses a package boundary; only the last one leaves the process."
+flowchart LR
+  U["user types<br/>/hello-pi"] --> IM["interactive mode<br/>(coding-agent)"]
+  IM --> CMD["extension command handler<br/>(extension in coding-agent)"]
+  CMD --> SES["AgentSession.prompt()<br/>(coding-agent)"]
+  SES --> LOOP["agentLoop<br/>(agent)"]
+  LOOP --> SS["streamSimple()<br/>(ai, compat.ts)"]
+  SS --> API["provider module<br/>(ai, api/)"]
+  API --> HTTP["provider HTTPS API"]
+```
+
+The same six steps apply to any extension command that triggers a model turn;
+only the handler body changes. [The lifecycle chapter](#sec:prompt-lifecycle)
+gives the full 10-stage version of this path, including hooks, tool
+execution, and rendering. The direction tells you where a fix belongs: a
+terminal component does not belong in `packages/agent`, and provider JSON
+does not belong in the TUI.
 
 ## Repository-level conventions
 
-The root `package.json` defines npm workspaces. Packages are ESM, and public
+The root `package.json` defines npm workspaces (npm's mechanism for linking
+the packages of one repository together). Packages are ESM, and public
 package names map back to source during development. An extension should import
 published package names for public types and APIs; use relative imports only
 inside the same package. This preserves the boundary installed users see.
@@ -165,7 +214,7 @@ that relative path.
 | Configuration | Global/project settings and defaults | `core/settings-manager.ts`, `core/defaults.ts` |
 | Model/auth resolution | Registered models, dynamic providers, credential lookup | `core/model-registry.ts`, `core/auth-storage.ts` |
 | Built-in tools | Read, bash, edit, write, search, file mutation coordination | `core/tools/`, `utils/tools-manager.ts` |
-| Interactive app | Chat transcript, editor, dialogs, commands, renderer adapters | `modes/interactive/interactive-mode.ts`, `modes/interactive/components/` |
+| Interactive app | Chat transcript, editor, dialogs, commands, renderer adapters (translation layers between session data and TUI components) | `modes/interactive/interactive-mode.ts`, `modes/interactive/components/` |
 | Extensions | Types, discovery/loading, event dispatch, context wrappers | `core/extensions/types.ts`, `core/extensions/loader.ts`, `core/extensions/runner.ts`, `core/extensions/wrapper.ts` |
 
 The table is an orientation map, not an exhaustive API list. On a first read,
@@ -213,27 +262,22 @@ such as session resume or fork.
 
 ## Persistence and context are different things
 
-Pi sessions are JSONL (JSON Lines: one complete JSON object per line) files
-managed by `SessionManager`. They are tree-shaped:
-entries have `id` and `parentId`, so a branch can exist in one file. The current
-branch is converted into LLM context by `buildContextEntries()` and related
-helpers in `core/session-manager.ts`.
+Architecture matters here because the session file and the model context are
+different representations owned by different layers: `SessionManager` in
+coding-agent owns the durable JSONL tree, while the context sent to the
+provider is rebuilt from it on every turn. The sessions chapter covers this
+boundary in detail — tree structure, `buildContextEntries()`, and the rule
+that `pi.appendEntry()` writes durable state the model never sees while
+`pi.sendMessage()` enters the conversation; see
+[the sessions chapter](#sec:sessions).
 
-The extension API exposes two methods relevant to this boundary.
-`pi.appendEntry(customType, data)` appends a custom session entry for durable
-extension state. `pi.sendMessage(message, options)` inserts a custom
-conversation message and can optionally trigger or queue model work.
-
-Not every durable entry reaches the provider. An entry written with
-`pi.appendEntry()` does not participate in LLM context, while a message sent
-with `pi.sendMessage()` does. This distinction is central to extension design:
-keep private UI/state metadata out of model context unless the model needs it.
-
-Compaction is another context transformation, not deletion. Pi writes a
-summary entry and reconstructs a compact context from the summary and newer
-entries. The generic algorithms are exported from
-`packages/agent/src/harness/compaction/`; coding-agent coordinates the
-user-facing policy and session entries.
+What belongs in this chapter is the ownership split for compaction.
+Compaction is a context transformation, not deletion: Pi writes a summary
+entry and reconstructs a compact context from the summary and newer entries.
+The generic algorithms live one layer down in the `agent` harness (the
+reusable runtime code `agent` provides for consumers such as coding-agent),
+exported from `packages/agent/src/harness/compaction/`; coding-agent
+coordinates the user-facing policy and session entries.
 
 ## Where to make a change
 
@@ -264,6 +308,28 @@ The full reference table:
 | Change colors and visual style | **Theme** consumed by renderers | Theme resources and TUI renderers |
 | Reuse a written user/model request | **Prompt** template or slash command | Prompt resources and command registration |
 | Share a tested set of resources or behavior | **Package** with its own manifest/version | Package/resource distribution code |
+
+Worked examples of the decision in practice:
+
+- **"I want a new slash command."** No package change. An extension calling
+  `pi.registerCommand()` (defined in
+  `packages/coding-agent/src/core/extensions/types.ts`, demonstrated in
+  `packages/coding-agent/examples/extensions/commands.ts`) adds the command
+  at runtime; Pi's own code stays untouched.
+- **"I want to support a new model provider."** First try
+  `pi.registerProvider()` from an extension (`types.ts` in the same
+  directory), which points an existing API family such as
+  `openai-responses` or `anthropic-messages` at a new base URL and model
+  list. Touch `packages/ai` only when the provider speaks a genuinely new
+  wire protocol that no module under `packages/ai/src/api/` implements.
+- **"I want to change how the transcript renders a tool."** Override the
+  renderer from an extension, not in `tui`. Tools carry optional
+  `renderCall`/`renderResult` functions (`types.ts`), and re-registering a
+  built-in tool with the same name replaces it — including its rendering —
+  as shown in
+  `packages/coding-agent/examples/extensions/built-in-tool-renderer.ts`.
+  `packages/tui` is the wrong layer: it owns generic components, not Pi's
+  chat rows.
 
 Continue to [Prompt lifecycle](#sec:prompt-lifecycle) for a source-level trace
 of how these package boundaries cooperate from interactive input through model

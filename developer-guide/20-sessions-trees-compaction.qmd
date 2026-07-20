@@ -5,8 +5,8 @@ restarts, supports `/resume` and `/new`, and keeps branches when you explore an
 earlier point with `/fork`, `/clone`, or `/tree`. When context fills, Pi can
 compact older work into a summary instead of discarding the session.
 
-This chapter first explains those user-visible behaviors. The final section
-maps them to `ctx.sessionManager`, `appendEntry`, and `session_*` events for
+This chapter first explains those user-visible behaviors. The final sections
+map them to `ctx.sessionManager`, `appendEntry`, and `session_*` events for
 extension authors. See [Customizing Pi](#sec:resources) for `sessionDir` and
 related configuration.
 
@@ -27,10 +27,50 @@ common history. The **leaf** is the current last entry on that path. **Context**
 is the selected representation sent to the model; it is not automatically the
 whole file on disk.
 
+A concrete timeline fixes the terms. You run `pi` in `~/proj` and exchange
+ten messages: that conversation is one **session**, persisted to one JSONL
+file, and each message (plus tool calls and tool results) is one **entry**.
+You quit. The next day you run `/resume`, pick the session, and Pi reloads
+the same file and keeps appending entries to it. Midway through, you go back
+to your fourth message and ask something different: the conversation now has
+two versions of everything after message four, and each version is a
+**branch**. The **leaf** is the last entry of whichever branch is active.
+When you send the next prompt, the **context** is the entry chain from that
+leaf back to the root — not necessarily every entry the file has ever stored.
+
 Start by imagining two answers to the same user question: answer A and answer
 B share the earlier messages but diverge later. A flat array cannot keep both
 answers without duplication. The small tree below shows why Pi stores parents
 and children before the chapter introduces JSONL details.
+
+## Where sessions live on disk
+
+Each project directory — the cwd where you run `pi` — gets its own session
+storage. One project directory accumulates many session files over time: one
+file per conversation, plus more as you resume, fork, or start over with
+`/new`.
+
+By default the files live under `~/.pi/agent/sessions/` in a subdirectory
+whose name encodes the cwd. `getDefaultSessionDirPath()` in
+`packages/coding-agent/src/core/session-manager.ts` computes it: resolve the
+cwd, strip one leading slash or backslash, replace every `/`, `\`, or `:`
+with `-`, and wrap the result in `--`. Running `pi` in `/Users/alice/proj`
+therefore stores its sessions in:
+
+```text
+~/.pi/agent/sessions/--Users-alice-proj--/<timestamp>_<uuid>.jsonl
+```
+
+The practical consequence: `/resume` opens with only the sessions created in
+the current directory (it lists them via `SessionManager.list(cwd, ...)`).
+Run `pi` in a different project and the selector shows nothing from the
+first project until you press Tab to switch the selector scope to all
+projects.
+
+The `sessionDir` setting relocates session storage away from this
+cwd-derived layout; see [Files, headers, and locations](#sec:session-files)
+below for precedence and examples, and [Customizing Pi](#sec:resources) for
+settings in general.
 
 ## Branches: why persistence is a tree
 
@@ -47,7 +87,8 @@ new target:  common ancestor -> D -> E
 optional summary of A/B/C is appended near E
 ```
 
-Configure this under `branchSummary` (same settings files as above):
+Configure this under `branchSummary` in the global or project settings files
+(see [Files, headers, and locations](#sec:session-files)):
 
 ```json
 {
@@ -95,7 +136,44 @@ chronological order. Other children are not provider context merely because
 they exist on disk. When debugging a surprising model response, inspect that
 active path rather than the whole session file.
 
-## Files, headers, and locations
+### A worked example: file state and leaf after each step
+
+Step (a): chat a few messages. One file, one path, leaf at the end.
+
+```text
+session file A:
+  u1 -> a1 -> u2 -> a2          leaf: a2
+```
+
+Step (b): `/tree` back to `u2` and continue with a different request. The
+new messages append as children of `u2`, so the file now holds two branches.
+The leaf moves to the new path; the old path is untouched on disk.
+
+```text
+session file A:
+  u1 -> a1 -> u2 -> a2          (old branch, unchanged)
+              |
+              +-> u3 -> a3      leaf: a3
+```
+
+Step (c): `/tree` again and select `a2`. Only the leaf pointer changes. Both
+branches remain in the file, and context for the next prompt is the chain
+`u1 -> a1 -> u2 -> a2`.
+
+```text
+session file A:
+  u1 -> a1 -> u2 -> a2          leaf: a2 (switched back)
+              |
+              +-> u3 -> a3
+```
+
+`/fork` performs the same jump to an earlier message but creates a **new
+session file** instead of an in-file branch: the new file contains only the
+path from the root to the chosen entry, and its header records the source
+file as `parentSession`. To move between the fork and the original you
+`/resume` the other file; `/tree` navigates branches within one file.
+
+## Files, headers, and locations {#sec:session-files}
 
 By default, coding-agent sessions live under the agent directory, arranged by
 working directory:
@@ -157,6 +235,16 @@ When a long session approaches the model context limit, Pi can compact it.
 summarizes older context into a durable entry and continues with the summary
 plus recent entries. The split-turn details below are primarily for debugging
 and extension interception.
+
+The model never sees the session file. On every turn it sees only the
+**context**: the entries on the active branch, converted to provider
+messages. The file on disk is the full history; the context is the extract
+of it that must fit inside the model's context window. As a conversation
+grows, that extract eventually stops fitting. Compaction resolves this by
+replacing the model-visible context with a summary of the older span plus
+the recent entries. The summarized entries stay in the session file and
+remain visible to `/tree` and `/resume`; only what gets sent to the model
+changes.
 
 Context windows are finite. Auto-compaction triggers when:
 
@@ -246,8 +334,6 @@ Any `withSession` callback receives a fresh replacement context. Captured
 pre-switch `pi`, command context, or `SessionManager` objects are stale after
 replacement and must not be reused. Capture plain strings or IDs before the
 switch, then use only the callback context for session-bound work.
-
-## For extension authors
 
 The user-facing tree has a public extension surface. `ctx.sessionManager`
 exposes the active session; `pi.appendEntry()` stores extension-private state;

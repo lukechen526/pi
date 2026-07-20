@@ -90,7 +90,8 @@ implementation directly rather than a globally installed or published build.
 
 If you only want to write extensions, you do not need to clone this repository.
 Install Pi globally and start writing `.ts` files under
-`~/.pi/agent/extensions/`; chapter 04 walks through discovery and reload.
+`~/.pi/agent/extensions/`; [Your first extension](#sec:extensions) walks
+through discovery and reload.
 
 ### Editor setup
 
@@ -133,41 +134,19 @@ coding agent. The root `package.json` declares npm workspaces. The interactive
 `pi` command is implemented by `@earendil-works/pi-coding-agent`; it composes a
 terminal UI, an agent runtime, and a provider-neutral AI API.
 
-### How the npm workspace works
+### The workspace in brief
 
-The root `package.json` declares five package workspaces through `packages/*`:
-`packages/tui`, `packages/ai`, `packages/agent`, `packages/coding-agent`, and
-`packages/orchestrator`. It also declares extension-example workspaces under
-`packages/coding-agent/examples/extensions/`, so `packages/*` is not the whole
-workspace list.
+The root `package.json` declares npm workspaces for the five packages under
+`packages/*` plus extension examples, and `npm install` links them for imports
+such as `@earendil-works/pi-ai`. Inside the repo, cross-package imports use
+published package names; relative `.ts` imports stay within one package.
+Extensions written outside the repo import the published packages and declare
+them as peer dependencies.
 
-An npm **workspace** is a package managed from a shared repository root.
-`npm install` links local workspace packages for imports such as
-`@earendil-works/pi-ai`. The root `tsconfig.json` separately maps package names
-to source entry points for whole-project type checking.
-
-When writing an extension outside the monorepo, import published npm packages
-and declare them as peer dependencies when Pi bundles them at runtime.
-
-### Import rules at a glance
-
-| Context | Import style | Example |
-|---|---|---|
-| Inside a package, same package | Relative with `.ts` | `import { Agent } from "./agent.ts"` |
-| Inside the repo, cross-package | Package name | `import { Type } from "@earendil-works/pi-ai"` |
-| Extension outside the repo | Published package name | `import { defineTool } from "@earendil-works/pi-coding-agent"` |
-
-The normal interactive prompt path crosses these packages:
-
-| Source package | Published package | Role | Start reading at |
-|-------------------------|-------------------------------------|---------------|--------------------|
-| `packages/tui` | `@earendil-works/pi-tui` | Reusable terminal UI primitives and differential rendering | `src/index.ts`, `src/tui.ts` |
-| `packages/ai` | `@earendil-works/pi-ai` | Models, provider dispatch, streaming API adapters, authentication | `src/index.ts`, `src/types.ts` |
-| `packages/agent` | `@earendil-works/pi-agent-core` | Provider-independent agent loop, message state, tool execution | `src/agent.ts`, `src/agent-loop.ts`, `src/types.ts` |
-| `packages/coding-agent` | `@earendil-works/pi-coding-agent` | CLI, interactive application, sessions, built-in tools, configuration, extensions | `src/main.ts`, `src/core/sdk.ts`, `src/core/agent-session.ts` |
-
-`packages/orchestrator` is experimental. It depends on coding-agent and is a
-separate process-orchestration surface, not a hidden step of normal prompting.
+[Architecture: packages, ownership, and entry points](#sec:architecture) is the
+authoritative map: what each package owns, the import rules, and the startup
+construction path. This index keeps only the mental model below so the two do
+not drift.
 
 ## A mental model in one diagram
 
@@ -191,46 +170,54 @@ not bypass the agent loop.
 
 ## Reading order and outcomes
 
-The rendered book makes its roles visible with parts. The route below is the
-same order recorded in `developer-guide/README.md` for filesystem browsers.
+The rendered book makes its roles visible with parts. The route below matches
+the rendered order recorded in `developer-guide/_quarto.yml` and in
+`developer-guide/README.md` for filesystem browsers.
 
 ### Start here
 
 1. [TypeScript used by Pi](#sec:typescript) is the short route; the optional
    [foundations workbook](17-typescript-foundations-workbook.qmd#sec:typescript-workbook)
    is at the end as an appendix.
-2. [Architecture: packages, ownership, and entry points](#sec:architecture)
+
+### Using Pi effectively
+
+2. [Using Pi day to day](#sec:using-pi): first session, login and models,
+   slash commands, keybindings, and CLI flags.
+3. [Sessions, trees, and compaction](#sec:sessions): durable context,
+   branching, and where session files live.
+4. [Customizing Pi](#sec:resources): settings, skills, prompts, themes, and
+   trust - the no-code mechanisms to try before writing code.
+
+### How Pi works
+
+5. [Architecture: packages, ownership, and entry points](#sec:architecture)
    gives each package one clear job.
+6. [Prompt lifecycle](#sec:prompt-lifecycle) traces Enter to settlement and
+   maps every extension hook point.
 
-### Runtime
+### Building extensions
 
-3. [Prompt lifecycle](#sec:prompt-lifecycle) traces Enter to settlement.
-4. [Agent core](#sec:agent-core) explains the reusable loop, events, queues,
-   and tool batches.
-5. [Built-in tools](#sec:tools) turns the loop into filesystem and shell
-   operations.
+7. [Your first extension](#sec:extensions) is the canonical runnable example.
+8. [Extension patterns](#sec:customization) turns that demo into a production
+   extension.
+9. [Packaging and distribution](#sec:packages) ships it as a Pi package.
 
-### Build extensions
+### Subsystem deep dives
 
-6. [Extensions](#sec:extensions) is the canonical first runnable example.
-7. [Customization and workflow](#sec:customization) turns that demo into a
-   production extension and follows immediately after it.
-
-### Subsystems and contribution
-
-8. [Sessions and durable context](#sec:sessions).
-9. [Resources, settings, and trust](#sec:resources).
-10. [Models, providers, and authentication](#sec:models).
-11. [The terminal UI](#sec:tui).
-12. [Testing, debugging, and contribution](#sec:testing).
+10. [Built-in tools](#sec:tools): the seven tools and their contracts.
+11. [Models, providers, and authentication](#sec:models).
+12. [Agent core](#sec:agent-core): the reusable loop, events, and queues.
+13. [The terminal UI](#sec:tui).
+14. [Run modes and SDK embedding](#sec:modes).
 
 ### Practice and reference
 
-13. [Guided source tours](#sec:tours).
-14. [Extension event reference](#sec:events).
-15. [Run modes and SDK embedding](#sec:modes).
-16. [Failure and recovery](#sec:failure).
-17. [Glossary](#sec:glossary).
+15. [Testing, debugging, and contribution](#sec:testing).
+16. [Guided source tours](#sec:tours).
+17. [Extension event and API reference](#sec:events).
+18. [Failure and recovery](#sec:failure).
+19. [Glossary](#sec:glossary).
 
 ## Source map used for this guide
 

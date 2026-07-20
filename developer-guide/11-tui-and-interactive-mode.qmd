@@ -220,19 +220,10 @@ controlled surface rather than direct access to private chat/editor fields:
 | Complex interaction | `custom(factory)` and experimental overlays |
 
 `ctx.mode` identifies the host surface, while `ctx.hasUI` says whether a
-dialog-capable adapter is actually bound:
-
-| `ctx.mode` | Host surface | Normal `ctx.hasUI` behavior |
-|---|---|---|
-| `"tui"` | Interactive terminal | `true`; dialogs and terminal components are available |
-| `"rpc"` | Persistent protocol client | `true`; supported dialogs/notices map to RPC messages |
-| `"json"` | Machine-readable event output | `false`; UI calls use noninteractive no-op/default behavior |
-| `"print"` | One-shot text output | `false`; UI calls use noninteractive no-op/default behavior |
-
-Use `ctx.hasUI` before operations that require a user response. Separately,
-require `ctx.mode === "tui"` for terminal-only behavior such as custom TUI
-components. An RPC UI is dialog-capable, but it is not an equivalent terminal
-component surface.
+dialog-capable adapter is actually bound. Guard on `ctx.hasUI` before
+operations that require a user response, and require `ctx.mode === "tui"` for
+terminal-only behavior such as custom TUI components; [Run modes](#sec:modes)
+has the full per-mode table.
 
 ## Custom components and focus
 

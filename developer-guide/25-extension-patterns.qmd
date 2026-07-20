@@ -1,8 +1,6 @@
 # Extension patterns: basic to advanced {#sec:customization}
 
-Patterns progress by surface area: **basic** patterns observe or intercept; **intermediate** patterns add tools or durable state; **advanced** patterns add custom UI, providers, or mode-aware behavior. Start with the smallest tier that solves the task. A hook that must remember something has entered tier 2.
-
-## Tier 1 - Basic: observe and intercept
+Patterns progress by surface area: **basic** patterns observe or intercept; **intermediate** patterns add tools or durable state; **advanced** patterns configure behavior through settings and package it for a team. Start with the smallest tier that solves the task. A hook that must remember something has entered tier 2.
 
 This chapter is the production follow-up to [Extensions: change Pi without
 forking it](#sec:extensions). Start with the safety gate, then adapt the
@@ -19,7 +17,9 @@ must be shared by every host. For example, changing a model default is
 configuration; asking for confirmation before `bash` is an extension; changing
 how every tool batch is scheduled belongs in the agent core.
 
-## First gate: safety and noninteractive behavior
+## Tier 1 - Basic: observe and intercept
+
+### First gate: safety and noninteractive behavior
 
 Before an extension can mutate files, invoke processes, or expose a powerful
 tool, decide what happens when there is no interactive UI. `ctx.hasUI` is false
@@ -53,41 +53,7 @@ honest; Pi does not run a second schema validation after a hook mutates input.
 The shipped `permission-gate.ts` example follows the same order. Test both the
 allow and deny paths, including the no-UI fallback, before adding more behavior.
 
-## Tier 3 - Advanced: configuration before code
-
-Pi configuration is layered. Read the layers from broadest to narrowest:
-
-1. built-in defaults
-2. global settings under `~/.pi/agent`
-3. project settings under `.pi`
-4. command-line flags and environment overrides
-5. extension behavior that reacts at runtime
-
-By default, the coding-agent package uses `~/.pi/agent` as its global agent
-directory and `.pi` for project-local resources. The `piConfig.configDir`
-package setting makes the config directory rebrandable, so extension code should
-import `CONFIG_DIR_NAME` when constructing a project path instead of hardcoding
-`.pi` (`CONFIG_DIR_NAME` resolves to `.pi` by default):
-
-```ts
-import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
-import { join } from "node:path";
-
-const projectConfigPath = join(ctx.cwd, CONFIG_DIR_NAME, "my-extension.json");
-```
-
-Use settings for stable choices such as providers, model selection, themes,
-keybindings, trusted packages, and resource locations. Use an extension when a
-choice must react to events, require a tool, retain state, or manipulate UI.
-
-Project configuration and resources are an execution boundary. Before trust is
-resolved, Pi loads only context files plus global and explicitly supplied CLI
-extensions. Approving trust allows protected project settings and resources to
-load; declining trust skips them. Trust is an input-loading decision, not a
-sandbox for subsequent tool execution. A global extension should call
-`ctx.isProjectTrusted()` before honoring project-local configuration of its own.
-
-## Tier 1 - Basic: inject focused context
+### Inject focused context
 
 `before_agent_start` is the correct point to add per-prompt instructions. It
 can add a custom message and/or replace the chained system prompt. The custom
@@ -121,7 +87,9 @@ provider request, use the `context` event instead; see
 [the extension event reference](#sec:choose-event)
 for when `context` is the right boundary versus prompt-scoped or provider hooks.
 
-## Pattern: state that survives restart and branching
+## Tier 2 - Intermediate: tools and state
+
+### State that survives restart and branching
 
 Here is the minimum session-tree model needed for this pattern. A session is a
 tree of persisted entries: a branch is one root-to-leaf path, and the active
@@ -185,7 +153,7 @@ await withFileMutationQueue(filePath, async () => {
 });
 ```
 
-## Pattern: dynamic tools and active-tool policy
+### Dynamic tools and active-tool policy
 
 `pi.registerTool()` may be called after startup. Pi refreshes it immediately
 for the current session; it appears in `pi.getAllTools()` and can be enabled
@@ -208,82 +176,7 @@ navigation in a command handler. A normal event handler can run within the
 active agent loop, while these operations replace contexts and must be
 coordinated from an explicit user command; the old context is stale afterward.
 
-## Route provider and custom-UI work to its canonical chapter
-
-This production chapter deliberately stops at the extension-facing contract:
-
-- For `pi.registerProvider()`, proxy endpoints, model catalogs, OAuth, or
-  provider-request hooks, continue to [Models, providers, and authentication](#sec:models).
-  Its custom-provider section is the canonical destination; do not copy
-  provider internals into an extension pattern.
-- For custom components, editors, renderers, and keybinding behavior, continue
-  to [Terminal UI and interactive mode](#sec:tui). The safety gate above remains
-  the required noninteractive fallback before adding a UI surface.
-
-Provider configuration can expose credentials. Keep API keys in environment
-references and never log headers, payloads, or system-prompt options. These
-links are optional follow-ups: the safety, state, concurrency, and verification
-patterns in this chapter do not require provider or TUI internals.
-
-## Pattern: package a team customization
-
-Keep package sharing explicit and small. Put third-party runtime dependencies in
-`dependencies`, declare imported Pi packages as peer dependencies, and use a
-`pi` manifest when a package needs nonstandard resource directories. Project
-packages remain trust-gated; use a global package for behavior independent of the
-current project. See [Resources, settings, and trust](#sec:resources), the
-canonical guide to resource discovery, package manifests, and trust semantics,
-before distributing a package.
-
-## Common mistakes and the correct boundary
-
-| Mistake | Why it fails | Better approach |
-|---|---|---|
-| Start a file watcher in the extension factory | Factory may run for a non-session command | Start in `session_start`; close in `session_shutdown` |
-| Keep all extension state in a closure | Reload/resume/fork loses it | Rebuild from session entries or tool `details` |
-| Call session replacement from a normal event | It can run inside the active agent loop and leave stale contexts | Use a command and `ExtensionCommandContext` |
-| Use `sendMessage` for private metadata | The model receives it | Use `appendEntry` and an entry renderer |
-| Ignore `AbortSignal` | Esc cannot stop your nested work | Forward `ctx.signal`/tool signal |
-| Mutate files in a custom tool without a queue | Parallel sibling calls can lose writes | Use `withFileMutationQueue` around read-modify-write |
-| Override `read` or `bash` with a different result shape | Built-in UI/session behavior expects details | Preserve the documented built-in contract |
-| Assume tool hooks observe sibling results | Parallel tools finish independently | Persist/coordinate after the batch or avoid the dependency |
-| Assume `agent_end` means completely idle | `agent_end` marks one agent loop ending; retry, compaction, or a queued continuation may still run | Use `agent_settled`, which fires only after no automatic retry, compaction, or queued continuation remains, or command `waitForIdle()` |
-| Test only `pi -e` | It does not prove discovery/reload behavior | Test from auto-discovery plus `/reload` |
-
-## A practical verification ladder
-
-Use evidence appropriate to what you changed:
-
-1. Type-check the extension with the same TypeScript version/API contracts used
-   by Pi, especially tool parameters and event return values. From an extension
-   package with a `tsconfig.json`, run `npx tsc --noEmit -p tsconfig.json`.
-2. Load it with `pi -e path/to/extension.ts` to isolate load errors.
-3. Move it to an auto-discovered location and verify `session_start`.
-4. Exercise the happy path and the relevant failure/deny/cancel path.
-5. Run `/reload`, then repeat. Confirm no duplicate resource, stale closure, or
-   leaked status remains.
-6. For persistence, start a new process, resume/fork a session, and verify the
-   intended branch state is restored.
-7. For tools, test a malformed call/schema failure and a cancellation. For
-   mutating tools, test concurrent sibling calls if applicable.
-8. If you change repository code, run `npm run check` and the relevant targeted
-   test rather than a real-provider test. The coding-agent suite uses a faux
-   provider and `test/suite/harness.ts` for deterministic tests.
-
-The repository ships extension examples in the directory
-`packages/coding-agent/examples/extensions/`. Start with the smallest match:
-
-- `hello.ts`: a tool
-- `permission-gate.ts`: a safety gate
-- `input-transform.ts`: input routing
-- `entry-renderer.ts`: transcript-only state
-- `dynamic-tools.ts`: runtime tool changes
-- `subagent/`: a larger composition
-
-
-## Tier 2 - Intermediate: tools and state
-
-## Tools: make the contract for the AI model explicit
+### Tools: make the contract for the AI model explicit
 
 A custom tool needs a unique `name`, human-facing `label`, description for the
 AI model, TypeBox `parameters`, and `execute`. The return `content` goes
@@ -313,13 +206,13 @@ an advanced compatibility commitment: preserve the built-in result `details`
 shape expected by session and UI code. If the override omits a renderer, Pi can
 reuse the built-in renderer slot, but prompt metadata is not inherited.
 
-## Understanding TypeBox schemas for tool parameters
+### Understanding TypeBox schemas for tool parameters
 
 A TypeBox schema validates model-supplied arguments at runtime and generates
 the JSON Schema sent to the provider. A runtime schema is therefore required
 even when TypeScript already knows the parameter types.
 
-### Common schema patterns
+#### Common schema patterns
 
 ```ts
 import { Type } from "@earendil-works/pi-ai";
@@ -341,7 +234,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 StringEnum(["small", "medium", "large"], { description: "Size" })
 ```
 
-### How to think about schemas as a JavaScript developer
+#### How to think about schemas as a JavaScript developer
 
 A TypeBox `Type.Object({...})` resembles a machine-readable JSDoc `@param`
 block. It answers three questions:
@@ -354,7 +247,7 @@ If you define a parameter as `Type.String()` and the model sends `42`, Pi
 rejects the call before your `execute` runs. This prevents malformed tool calls
 from reaching your code.
 
-### StringEnum vs Type.Union for string literals
+#### StringEnum vs Type.Union for string literals
 
 For tools exposed to Google's Gemini API, use `StringEnum` from `@earendil-works/pi-ai`
 instead of `Type.Union([Type.Literal("a"), Type.Literal("b")])`. Google's API does
@@ -362,7 +255,7 @@ not support the `enum` constraint produced by `Type.Union` with literals, so the
 model might suggest invalid values. `StringEnum` generates the correct JSON Schema
 form that all providers understand.
 
-## Commands, UI, and rendering
+### Commands, UI, and rendering
 
 Commands are best for direct user actions and configuration. If multiple
 extensions register the same name, Pi keeps both and gives them numeric
@@ -387,7 +280,7 @@ that content participates in LLM context. Use an entry renderer for a custom
 entry created with `pi.appendEntry()`; that is durable transcript/UI state but
 does not reach the LLM. This is the key display-versus-context choice.
 
-## State, sessions, and queues
+### State, sessions, and queues
 
 Branch reconstruction and durable session entries are covered in
 [Sessions and durable context](#sec:sessions). Use this section to choose where
@@ -423,3 +316,115 @@ always starts or continues a turn:
 Do not start a second direct agent run from a hook; use these queues.
 
 For exact event shapes, use the [extension event reference](#sec:events).
+
+## Tier 3 - Advanced: configuration and packaging
+
+Pi configuration is layered. Read the layers from broadest to narrowest:
+
+1. built-in defaults
+2. global settings under `~/.pi/agent`
+3. project settings under `.pi`
+4. command-line flags and environment overrides
+5. extension behavior that reacts at runtime
+
+By default, the coding-agent package uses `~/.pi/agent` as its global agent
+directory and `.pi` for project-local resources. The `piConfig.configDir`
+package setting makes the config directory rebrandable, so extension code should
+import `CONFIG_DIR_NAME` when constructing a project path instead of hardcoding
+`.pi` (`CONFIG_DIR_NAME` resolves to `.pi` by default):
+
+```ts
+import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
+
+const projectConfigPath = join(ctx.cwd, CONFIG_DIR_NAME, "my-extension.json");
+```
+
+Use settings for stable choices such as providers, model selection, themes,
+keybindings, trusted packages, and resource locations. Use an extension when a
+choice must react to events, require a tool, retain state, or manipulate UI.
+
+Project configuration and resources are an execution boundary. Before trust is
+resolved, Pi loads only context files plus global and explicitly supplied CLI
+extensions. Approving trust allows protected project settings and resources to
+load; declining trust skips them. Trust is an input-loading decision, not a
+sandbox for subsequent tool execution. A global extension should call
+`ctx.isProjectTrusted()` before honoring project-local configuration of its own.
+
+### Package a team customization
+
+Keep package sharing explicit and small. Project packages remain trust-gated;
+use a global package for behavior independent of the current project. The
+manifest fields, dependency placement, install commands, and publishing steps
+are covered in [Packaging and sharing extensions](#sec:packages); see
+[Resources, settings, and trust](#sec:resources), the canonical guide to
+resource discovery, package manifests, and trust semantics, before distributing
+a package.
+
+## Route provider and custom-UI work to its canonical chapter
+
+This production chapter deliberately stops at the extension-facing contract:
+
+- For `pi.registerProvider()`, proxy endpoints, model catalogs, OAuth, or
+  provider-request hooks, continue to [Models, providers, and authentication](#sec:models).
+  Its custom-provider section is the canonical destination; do not copy
+  provider internals into an extension pattern.
+- For custom components, editors, renderers, and keybinding behavior, continue
+  to [Terminal UI and interactive mode](#sec:tui). Never hardcode a raw key
+  check in extension code; register a default through the configurable
+  keybindings described there. The safety gate above remains the required
+  noninteractive fallback before adding a UI surface.
+
+Provider configuration can expose credentials. Keep API keys in environment
+references and never log headers, payloads, or system-prompt options. These
+links are optional follow-ups: the safety, state, concurrency, and verification
+patterns in this chapter do not require provider or TUI internals.
+
+## Common mistakes and the correct boundary
+
+| Mistake | Why it fails | Better approach |
+|---|---|---|
+| Start a file watcher in the extension factory | Factory may run for a non-session command | Start in `session_start`; close in `session_shutdown` |
+| Keep all extension state in a closure | Reload/resume/fork loses it | Rebuild from session entries or tool `details` |
+| Call session replacement from a normal event | It can run inside the active agent loop and leave stale contexts | Use a command and `ExtensionCommandContext` |
+| Use `sendMessage` for private metadata | The model receives it | Use `appendEntry` and an entry renderer |
+| Ignore `AbortSignal` | Esc cannot stop your nested work | Forward `ctx.signal`/tool signal |
+| Mutate files in a custom tool without a queue | Parallel sibling calls can lose writes | Use `withFileMutationQueue` around read-modify-write |
+| Override `read` or `bash` with a different result shape | Built-in UI/session behavior expects details | Preserve the documented built-in contract |
+| Assume tool hooks observe sibling results | Parallel tools finish independently | Persist/coordinate after the batch or avoid the dependency |
+| Assume `agent_end` means completely idle | `agent_end` marks one agent loop ending; retry, compaction, or a queued continuation may still run | Use `agent_settled`, which fires only after no automatic retry, compaction, or queued continuation remains, or command `waitForIdle()` |
+| Write to stdout with `console.log` | In print, JSON, and RPC modes stdout carries machine-readable output; stray writes corrupt it | Use the debug log; see [Run modes and SDK embedding](#sec:modes) |
+| Test only `pi -e` | It does not prove discovery/reload behavior | Test from auto-discovery plus `/reload` |
+
+## A practical verification ladder
+
+Use evidence appropriate to what you changed:
+
+1. Type-check the extension with the same TypeScript version/API contracts used
+   by Pi, especially tool parameters and event return values. From an extension
+   package with a `tsconfig.json`, run `npx tsc --noEmit -p tsconfig.json`.
+2. Load it with `pi -e path/to/extension.ts` to isolate load errors.
+3. Move it to an auto-discovered location and verify `session_start`.
+4. Exercise the happy path and the relevant failure/deny/cancel path.
+5. Run `/reload`, then repeat. Confirm no duplicate resource, stale closure, or
+   leaked status remains.
+6. For persistence, start a new process, resume/fork a session, and verify the
+   intended branch state is restored.
+7. For tools, test a malformed call/schema failure and a cancellation. For
+   mutating tools, test concurrent sibling calls if applicable.
+8. If you change repository code, run `npm run check` and the relevant targeted
+   test rather than a real-provider test. The coding-agent suite uses a faux
+   provider and `test/suite/harness.ts` for deterministic tests; as covered in
+   [Testing, debugging, and contribution workflow](#sec:testing), the
+   faux-provider harness is also the practical way to test an extension's
+   behavior without real API keys.
+
+The repository ships extension examples in the directory
+`packages/coding-agent/examples/extensions/`. Start with the smallest match:
+
+- `hello.ts`: a tool
+- `permission-gate.ts`: a safety gate
+- `input-transform.ts`: input routing
+- `entry-renderer.ts`: transcript-only state
+- `dynamic-tools.ts`: runtime tool changes
+- `subagent/`: a larger composition

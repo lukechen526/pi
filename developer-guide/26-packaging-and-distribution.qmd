@@ -1,4 +1,4 @@
-# Packaging and sharing extensions
+# Packaging and sharing extensions {#sec:packages}
 
 An extension can grow from one file to a directory and then to an npm or git package. Packages are delivery mechanisms for trusted extensions, skills, prompts, and themes; review their code before installing them.
 
@@ -40,6 +40,11 @@ re-export from `@earendil-works/pi-ai`. Package conventions also discover
 `extensions/`, `skills/`, `prompts/`, and `themes/` when a `pi` manifest is not
 present, but an explicit manifest is clearer and supports filtering.
 
+The `pi-package` keyword is an npm search and package-gallery convention, not
+something Pi reads: Pi loads a package from its declared source and manifest,
+never from keywords. Keep the keyword so others can find the package on
+npmjs.com and in the community package gallery.
+
 Users can install a package from npm or git with `pi install`, or list it under
 the `packages` array in settings. Project-installed packages are trust-gated
 just like project-local extensions.
@@ -62,8 +67,8 @@ npm init -y
 mkdir extensions
 ```
 
-Create `extensions/index.ts` with the hello-pi extension from the earlier
-example in this chapter.
+Create `extensions/index.ts` with the hello-pi extension built in
+[Your first extension](#sec:extensions).
 
 **Step 3 -- Configure `package.json`**
 
@@ -83,25 +88,31 @@ Edit `package.json` to add:
 }
 ```
 
-The `"pi-package"` keyword makes the package discoverable. The `pi` manifest
-declares its resource directories, and `peerDependencies` identifies the Pi
-runtime packages supplied by the host. This list is intentionally shorter than
-the earlier generic manifest: the hello extension imports only
-`@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent`. Add
-`@earendil-works/pi-agent-core`, `@earendil-works/pi-tui`, or `typebox` only if
-the package imports them.
+The `pi` manifest declares its resource directories, and `peerDependencies`
+identifies the Pi runtime packages supplied by the host. This list is
+intentionally shorter than the earlier generic manifest: the hello extension
+imports only `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent`.
+Add `@earendil-works/pi-agent-core`, `@earendil-works/pi-tui`, or `typebox`
+only if the package imports them.
 
 **Step 4 -- Test locally**
 
-In a project directory where you use Pi, add your package path to settings:
+Install the package from its local path into a project directory where you use
+Pi:
 
-```json
-{
-  "packages": ["/absolute/path/to/pi-hello-demo"]
-}
+```bash
+pi install /absolute/path/to/pi-hello-demo
 ```
 
-Then start Pi. Your extension should load. Test with `/hello-pi` and verify
+A relative path such as `pi install ../pi-hello-demo` works as well: any
+source that does not start with `npm:`, `git:`, `github:`, `http(s):`, or
+`ssh:` is treated as a local path. Local-path packages are resolved in place,
+not copied, so edits to the source are picked up on the next start or
+`/reload`. The install command also adds the source to the `packages` array in
+settings (global by default, project settings with `-l`), which you can
+equivalently edit by hand.
+
+Start Pi. Your extension should load. Test with `/hello-pi` and verify
 the startup notification appears.
 
 **Step 5 -- Publish to npm**
@@ -113,11 +124,48 @@ npm publish
 Users can then install it with:
 
 ```bash
-pi install @your-name/pi-hello-demo
+pi install npm:@your-name/pi-hello-demo
 ```
 
-For local testing before publishing, `pi install` also accepts a git URL or
-local path.
+`pi install` also accepts git sources (`git:github.com/user/repo`,
+`git:git@github.com:user/repo`, `https://github.com/user/repo`, or
+`ssh://git@github.com/user/repo`) for testing before publishing.
+
+## Manage installed packages
+
+`pi list` prints the packages configured in user settings and, separately, in
+project settings, each with its installed path; packages whose resources are
+filtered by settings are marked `(filtered)`.
+
+`pi remove <source>` removes a package and deletes its source from settings
+(`pi uninstall` is an alias). Pass `-l` to remove from project settings
+instead of global settings. The source argument must match the configured
+source; if nothing matches, the command reports `No matching package found`.
+
+`pi update` covers three targets:
+
+- `pi update` with no arguments updates Pi itself (same as `pi update --self`
+  or `pi update pi`). `--force` reinstalls even when the current version is
+  the latest.
+- `pi update --extensions` updates all installed packages;
+  `pi update <source>` or `pi update --extension <source>` updates one.
+- `pi update --models` refreshes the model catalogs only.
+- `pi update --all` updates Pi and all packages.
+
+Version pinning controls what an update touches. An npm source with an exact
+version, such as `npm:@foo/bar@1.2.3`, is pinned: `pi update` skips it, and
+resolution reinstalls it if the installed copy no longer satisfies the
+configured version. A range such as `npm:@foo/bar@^1.2.0` updates to the
+latest version within that range, and an unpinned source tracks the latest
+release. For git sources, a `#ref` is the configured checkout target rather
+than an update lock: an update reconciles the clone to the configured ref.
+Local-path packages are never updated because they are resolved in place.
+Pin an exact version for published packages whose updates you want to review
+before they land.
+
+## Resource delivery
+
+Packages may ship skills, prompts, and themes alongside extension code. Their resource paths and package filters follow the settings scope; use explicit manifest paths when the layout is non-standard. A package is not a separate execution mode: its extension code has the same privileges as Pi.
 
 ### Package layout conventions
 
@@ -130,9 +178,5 @@ local path.
 
 With an explicit `pi` manifest, Pi uses only the declared paths. This supports
 non-standard locations and lets a package exclude conventional directories.
-
-## Resource delivery
-
-Packages may ship skills, prompts, and themes alongside extension code. Their resource paths and package filters follow the settings scope; use explicit manifest paths when the layout is non-standard. A package is not a separate execution mode: its extension code has the same privileges as Pi.
 
 Before sharing, test the installed form, pin or review dependencies as appropriate, and document the trust boundary for project installs.

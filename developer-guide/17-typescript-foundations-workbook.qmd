@@ -32,7 +32,8 @@ patterns that real extension code uses, and Part 5 applies the basics to real
 Pi source. The reference section at the end is there when you get stuck.
 
 Read the foundations in order if you are coming from JavaScript. Otherwise use
-the section links from chapter 01, do the checkpoints before reading answers,
+the section links from [the TypeScript route](01-typescript-for-pi.qmd#sec:typescript),
+do the checkpoints before reading answers,
 and return to [the main Pi route](01-typescript-for-pi.qmd#sec:typescript) when
 you are ready for architecture. Checkpoint and exercise answers are collected
 in an "Answers" subsection at the end of each part, so you can attempt a
@@ -3021,9 +3022,8 @@ data looks like; it never fills in missing values for you.
 
 For string literals inside a tool contract, prefer the helper Pi ships for
 provider compatibility: `StringEnum([...])` instead of hand-written
-`Type.Union` of literals. Chapter 4 explains the difference and the schema
-policy in
-[StringEnum vs Type.Union](24-your-first-extension.qmd#stringenum-vs-typeunion-for-string-literals).
+`Type.Union` of literals. [Your first extension](24-your-first-extension.qmd#stringenum-vs-typeunion-for-string-literals)
+explains the difference and the schema policy.
 
 #### Reporting why a value failed: `Value.Errors`
 
@@ -3422,8 +3422,7 @@ In this part you will learn to:
 - say which of Pi's run mechanisms type-check and which only strip types;
 - use editor hover and go-to-definition to read an unfamiliar Pi type in
   place;
-- follow the guided tours through a custom tool, an agent event, and
-  lifecycle code;
+- use the guided source tours as TypeScript reading exercises;
 - make a small safe change and verify it by reading the tests.
 
 ### Pi's runtime and developer workflow
@@ -3524,64 +3523,38 @@ The annotated `AgentEvent` excerpt in
 [Discriminated unions in Pi](#discriminated-unions-in-pi) is the same exercise
 applied to a union: real path, real code, numbered commentary.
 
-### Guided source tour: a custom tool
+### Guided source tours as TypeScript exercises {#guided-source-tour-a-custom-tool}
 
-Open `packages/coding-agent/examples/extensions/hello.ts` and identify the
-Everyday Types concepts in the file:
+[Guided source tours](#sec:tours) is the full tour collection. Treat each
+tour as a reading exercise by naming the TypeScript concepts in the files you
+open; three starters:
 
-1. object types in the tool definition;
-2. a TypeBox runtime schema;
-3. a callback stored as `execute`;
-4. an optional cancellation signal;
-5. a structured runtime result.
-
-Then follow `defineTool` to
-`packages/coding-agent/src/core/extensions/types.ts`. Read the signature only
-after understanding the small example above.
-
-### Guided source tour: an agent event
-
-Start with the `AgentEvent` excerpt in
-[Discriminated unions in Pi](#discriminated-unions-in-pi), then open the real
-union in `packages/agent/src/types.ts`. Find a consumer in
-`packages/agent/src/agent-loop.ts`. For one event, answer:
-
-- Which literal selects the branch?
-- Which fields are available after narrowing?
-- Is the event emitted immediately or stored?
-- What happens if a new variant is added?
-
-This is the same union-and-narrowing skill used in
-[Part 1](#everyday-typescript-fundamentals), applied to Pi.
-
-### Guided source tour: state and lifecycle
-
-When reading agent state, trace ownership:
-
-- Which object owns the array?
-- Is a shallow snapshot enough?
-- Which callback is stored for later?
-- Which signal reaches the I/O operation?
-- Which method releases listeners or cancels work?
-
-This connects arrays, references, callbacks, `AbortSignal`, and classes without
-requiring you to design the whole runtime from scratch.
+- **A custom tool.** Open `packages/coding-agent/examples/extensions/hello.ts`
+  and identify the Everyday Types concepts in the file: object types in the
+  tool definition, a TypeBox runtime schema, a callback stored as `execute`,
+  an optional cancellation signal, and a structured runtime result. Then
+  follow `defineTool` to
+  `packages/coding-agent/src/core/extensions/types.ts` and read the signature
+  only after understanding the small example above.
+- **An agent event.** Start with the `AgentEvent` excerpt in
+  [Discriminated unions in Pi](#discriminated-unions-in-pi), then open the
+  real union in `packages/agent/src/types.ts` and a consumer in
+  `packages/agent/src/agent-loop.ts`. For one event, answer: which literal
+  selects the branch, which fields are available after narrowing, is the
+  event emitted immediately or stored, and what happens if a new variant is
+  added.
+- **State and lifecycle.** When reading agent state, trace ownership: which
+  object owns the array, is a shallow snapshot enough, which callback is
+  stored for later, which signal reaches the I/O operation, and which method
+  releases listeners or cancels work.
 
 ### Make a small safe change
 
-Use this workflow for a TypeScript change:
-
-1. find the declaration;
-2. find construction sites and callers;
-3. identify literal tags and optional fields;
-4. mark external data boundaries;
-5. follow callbacks, arrays, signals, and cleanup;
-6. make the smallest change that preserves the contract;
-7. update every union consumer if a variant changes;
-8. run a focused check, then `npm run check` when code changes.
-
-For a documentation-only change, render the guide and inspect the generated
-PDF. For a tool change, test valid input, invalid input, and cancellation.
+[Testing and contribution](#sec:testing) owns the change workflow: find the
+declaration and its callers, make the smallest change that preserves the
+contract, update every union consumer when a variant changes, then run a
+focused check and `npm run check` when code changes. For a tool change, test
+valid input, invalid input, and cancellation.
 
 ### Reading a Pi test file
 
@@ -3633,115 +3606,46 @@ reaches the code.
 
 ### Writing your first test
 
-Turn the reading habit around: here is a complete, minimal test file for the
+Turn the reading habit around: write a valid/invalid `it` pair for the
 `readTodo` guard from
-[Part 3](#typebox-practice-from-external-data-to-a-tool-parameter), written
-from scratch:
+[Part 3](#typebox-practice-from-external-data-to-a-tool-parameter) — one test
+where matching input comes back whole, one where a missing field returns
+`undefined` instead of throwing. Test the guard, not the schema: TypeBox is
+already tested by its authors, so what you own is the `unknown` to
+`Todo | undefined` decision in `readTodo`. Pi tests import TypeBox straight
+from the `typebox` package (older code and tutorials use
+`@sinclair/typebox`). [Testing and contribution](#sec:testing) owns the test
+workflow: where test files live, how to run one file, and the faux-provider
+harness for session-level tests.
 
-```ts
-import { Type, type Static } from "typebox";
-import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
-
-const TodoSchema = Type.Object({
-	title: Type.String(),
-	completed: Type.Boolean(),
-});
-
-type Todo = Static<typeof TodoSchema>;
-
-function readTodo(value: unknown): Todo | undefined {
-	if (!Value.Check(TodoSchema, value)) return undefined;
-	return value;
-}
-
-describe("readTodo", () => {
-	it("returns the todo when the input matches the schema", () => {
-		const todo = readTodo({ title: "Write docs", completed: false });
-		expect(todo).toEqual({ title: "Write docs", completed: false });
-	});
-
-	it("returns undefined when the input does not match", () => {
-		expect(readTodo({ title: "Write docs" })).toBeUndefined();
-	});
-});
-```
-
-1. `import { describe, expect, it } from "vitest"` is the same import shape
-   every Pi test uses; nothing about testing is Pi-specific.
-2. Pi tests import TypeBox straight from the `typebox` package, which is the
-   library's current name (older code and tutorials use
-   `@sinclair/typebox`); the rest of this workbook instead imports `Type` and
-   `Static` through `@earendil-works/pi-ai`, which re-exports the same names.
-3. The schema and guard are copied unchanged from Part 3 so this file runs
-   standalone. In a real change you would import the guard from its module
-   instead of copying it.
-4. Each `it` reads arrange, act, assert: build an input, call `readTodo`,
-   compare the result with `expect`.
-5. The first case is valid input: a matching object must come back whole,
-   compared field by field with `toEqual`.
-6. The second case is invalid input: a missing field must return `undefined`,
-   not throw.
-7. Test the guard, not the schema. TypeBox is already tested by its authors;
-   what you own is the `unknown` to `Todo | undefined` decision in `readTodo`.
-8. Pi keeps tests in each package's `test/` directory with a `.test.ts`
-   suffix; this file would live at
-   `packages/coding-agent/test/todo.test.ts`.
-
-Run one test file from the package root, the way `AGENTS.md` describes:
-
-```text
-$ node ../../node_modules/vitest/dist/cli.js --run test/todo.test.ts
-```
-
-The full non-e2e suite is `./test.sh` from the repository root. `AGENTS.md`
-warns not to run the raw vitest suite directly, because endpoint and auth
-environment variables can activate e2e tests that hit real providers.
-
-**Checkpoint:** A third `it` belongs in this file. What input does it use,
-and what does it assert? (answer: [Part 5 answers](#answers-part-5))
+**Checkpoint:** A third `it` belongs in that test file. What input does it
+use, and what does it assert? (answer: [Part 5 answers](#answers-part-5))
 
 ### Capstone: one todo extension end to end
 
 *~30 min · core*
 
-Every piece of this workbook lands in one small extension. Work the steps in
-order; each links back to the section that teaches it. This is a synthesis
-map, not new material — reread the linked section whenever a step is not
-routine.
+Assemble the workbook's pieces into one small extension: a `TodoSchema` with
+its derived static type ([TypeBox builders](#typebox-builders)), a `readTodo`
+guard that accepts `unknown`
+([`unknown`, `any`, and external data](#unknown-any-and-external-data)), a
+tool that reuses the schema as `parameters` and checks `signal?.aborted`
+inside `execute`
+([TypeBox in a Pi tool](#typebox-in-a-pi-tool),
+[Promises, streams, and `AbortSignal`](#promises-streams-and-abortsignal)),
+registration from an extension factory
+([The real registration in Pi](#the-real-registration-in-pi)), and a
+valid/invalid test pair for the guard. For the extension skeleton, the test
+and verification workflow, and a guided walkthrough, follow
+[A complete first extension](24-your-first-extension.qmd#a-complete-first-extension),
+[Testing and contribution](#sec:testing), and
+[Guided source tours](#sec:tours). Reread the linked workbook section
+whenever a step is not routine; if every step felt routine, you are done with
+this workbook.
 
-1. **Define the schema.** Build `TodoSchema` with the TypeBox builders and
-   derive `type Todo = Static<typeof TodoSchema>`
-   ([TypeBox builders](#typebox-builders),
-   [Step 1](#step-1-describe-the-expected-value)).
-2. **Validate at the boundary.** Accept external data with
-   `Value.Check(TodoSchema, value)`; when it fails, report what
-   `Value.Errors` says instead of guessing
-   ([What TypeBox does](#what-typebox-does),
-   [Reporting why a value failed](#reporting-why-a-value-failed-valueerrors)).
-3. **Write the guard.** `function readTodo(value: unknown): Todo | undefined`
-   turns unchecked data into a typed value
-   ([`unknown`, `any`, and external data](#unknown-any-and-external-data),
-   [Step 2](#step-2-receive-an-unknown-value)).
-4. **Define the tool.** Reuse the schema as `parameters`, and check
-   `signal?.aborted` inside `execute` before expensive work
-   ([TypeBox in a Pi tool](#typebox-in-a-pi-tool),
-   [Promises, streams, and `AbortSignal`](#promises-streams-and-abortsignal)).
-5. **Register the tool.** Call `pi.registerTool(todoTool)` inside the
-   extension factory — registration stores the callback, Pi invokes it later
-   ([Functions as callbacks and closures](#functions-as-callbacks-and-closures),
-   [The real registration in Pi](#the-real-registration-in-pi)).
-6. **Test the guard.** Write the valid-input and invalid-input `it` pair for
-   `readTodo` ([Writing your first test](#writing-your-first-test)).
-7. **Verify.** Run the focused test file, then `npm run check` for the code
-   change ([Make a small safe change](#make-a-small-safe-change),
-   [Pi's runtime and developer workflow](#pis-runtime-and-developer-workflow)).
+#### Ready for your first extension?
 
-If every step felt routine, you are done with this workbook.
-
-#### Ready for chapter 04?
-
-You are ready for the extensions chapter when you can do each of these
+You are ready for [Your first extension](24-your-first-extension.qmd#sec:extensions) when you can do each of these
 without looking at an answer:
 
 - write a TypeBox schema for a tool's parameters and derive its static type
@@ -3762,7 +3666,7 @@ without looking at an answer:
 - follow an `AbortSignal` from owner to worker and say who may call `abort`
   ([Promises, streams, and `AbortSignal`](#promises-streams-and-abortsignal));
 - write a valid/invalid test pair and run just that file
-  ([Writing your first test](#writing-your-first-test)).
+  ([Testing and contribution](#sec:testing)).
 
 When all of these are comfortable, continue to
 [A complete first extension](24-your-first-extension.qmd#a-complete-first-extension).
