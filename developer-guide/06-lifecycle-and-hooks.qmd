@@ -13,14 +13,16 @@ handlers into the interactive components directory,
 `packages/coding-agent/src/modes/interactive/`, and then into
 `components/` or `packages/tui`.
 
-It is source-grounded in the interactive mode and session files, plus
-`packages/agent/src/agent.ts`, `packages/agent/src/agent-loop.ts`, and the
-`packages/ai` dispatch layer.
-
-The exact call graph also has guards for commands, compaction, retries, queued
-messages, and other modes. The numbered path summarizes the current source;
-its diagrams omit helper calls that do not alter the data/control boundary
-being explained.
+::: {.callout-note}
+## Scope and sources
+This chapter is source-grounded in the interactive mode and session files,
+plus `packages/agent/src/agent.ts`, `packages/agent/src/agent-loop.ts`, and
+the `packages/ai` dispatch layer. The exact call graph also has guards for
+commands, compaction, retries, queued messages, and other modes; the numbered
+path summarizes the current source, and its diagrams omit helper calls that do
+not alter the data/control boundary being explained. You can skim these
+details on a first read and treat the numbered stages as the map.
+:::
 
 ## A small vocabulary for the trace
 
@@ -77,19 +79,21 @@ resolved through `getUserInput()`. The `run()` loop awaits that method, then
 calls `await this.session.prompt(userInput)`.
 
 When Pi is already streaming, regular Enter calls `session.prompt(text,
-{ streamingBehavior: "steer" })`; Alt+Enter uses `"followUp"`. **Steering** waits
+{ streamingBehavior: "steer" })`; Alt+Enter uses `"followUp"` (the editor keys
+are covered in [Using Pi day to day](#sec:using-pi)). **Steering** waits
 for the current assistant response and its tool work to finish, then injects
 the message before the next provider request. A **follow-up** is held until
 there are no more tool calls or steering messages and the run would otherwise
 stop, then starts another turn. Neither starts a second concurrent agent run;
-each call queues a message at that exact loop boundary. **Compaction**
-summarizes older context into a durable entry so the model's context window is
-not exceeded; [Sessions and context](#sec:sessions) covers it in detail. During
-compaction, non-command input is held by interactive mode until the compaction
-flow completes.
+each call queues a message at that exact loop boundary. Esc takes the opposite
+path: it aborts the active run rather than queuing input — Stage 10 covers
+that. **Compaction** summarizes older context into a durable entry so the
+model's context window is not exceeded; [Sessions and context](#sec:sessions)
+covers it in detail. During compaction, non-command input is held by
+interactive mode until the compaction flow completes.
 
 The initial prompt supplied by command-line arguments travels through the same
-`session.prompt()` API. Print and RPC modes do not instantiate
+`session.prompt()` API. Print and [RPC](#sec:glossary) modes do not instantiate
 `InteractiveMode`, but they converge on `AgentSession` rather than
 reimplementing the provider path.
 
@@ -119,12 +123,48 @@ handle it. If it continues, Pi expands `/skill:name ...`; skills are reusable
 model instructions and prompt templates are parameterized prompt snippets. Pi
 then continues with the expanded text.
 
+```{mermaid}
+%%| label: fig-input-routing
+%%| fig-cap: "Stage 2 input routing. Built-in and extension commands are claimed before the input event fires; only unclaimed text reaches skill and template expansion and becomes a prompt."
+%%{init: {"flowchart": {"nodeSpacing": 12, "rankSpacing": 10}, "themeVariables": {"fontSize": "11px"}}}%%
+flowchart TD
+  B{"Built-in?"}
+  B -->|yes| BH["InteractiveMode<br/>handles it"]:::done
+  B -->|no| X{"Extension?"}
+  X -->|yes| XH["Handler runs;<br/>event skipped"]:::done
+  X -->|no| I["Input event:<br/>continue, transform,<br/>or handle"]:::hook
+  I -->|continue| E["Expand skill/template;<br/>becomes prompt"]:::done
+  classDef hook fill:#fde2c4,stroke:#a05a00,color:#000000
+  classDef done fill:#e9e9e9,stroke:#666666,color:#000000
+```
+
 **Hook selection comes first:** built-in commands have already been handled by
 `InteractiveMode`, and a matching registered extension command has already
 returned before `input` is emitted. Therefore `input` is the interception point
 for ordinary text and unclaimed slash text. An extension that wants to
 intercept a skill invocation must use `input`; one that wants a durable custom
 command should use `registerCommand`, not parse slash text manually.
+
+A minimal extension that uses both interception points (save it, then load
+with `pi -e ./input-routing.ts` or copy it to `~/.pi/agent/extensions/` and
+restart or `/reload`):
+
+```typescript
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+export default function (pi: ExtensionAPI) {
+  // A durable custom command: /my-cmd runs immediately, even mid-stream.
+  pi.registerCommand("my-cmd", {
+    description: "Show a notification",
+    handler: async (_args, ctx) => ctx.ui.notify("ran /my-cmd", "info"),
+  });
+  // Ordinary text: rewrite it before skill/template expansion.
+  pi.on("input", async (event) => {
+    if (event.text.startsWith("?quick "))
+      return { action: "transform", text: `Respond briefly: ${event.text.slice(7)}` };
+  });
+}
+```
 
 **Why an extension author cares:** this stage decides which interception point
 is yours — `registerCommand()` for a new slash command, the `input` event for
@@ -136,19 +176,43 @@ transforming or handling ordinary text.
 message plus any buffered extension messages, notifies extensions that a run is
 beginning, and hands everything to the generic agent loop.
 
-`AgentMessage` is the agent-core union of provider-compatible LLM `Message`
-values and application-defined custom message types. That lets the session
-retain rich application messages even when its later conversion step chooses a
-different LLM representation.
+`AgentMessage` is the type the session passes around: it is either a
+provider-ready LLM `Message` or a coding-agent-specific custom message type.
+That union lets the session keep rich application messages (custom UI entries,
+tool details) alongside the plain messages the model will eventually see, even
+when the later conversion step maps them to a different LLM representation.
 
 For a fresh run, `AgentSession.prompt()` validates the selected model and
 credentials, checks whether compaction is needed, and creates a user message.
 It then appends pending `nextTurn` messages: custom messages buffered by
-`sendCustomMessage(..., { deliverAs: "nextTurn" })` (an ExtensionAPI method)
-for inclusion with the
-*next* fresh user prompt, rather than delivery to an active run. Next it emits
-`before_agent_start`, whose handlers can add custom messages and chain a
-system-prompt override, then calls `_runAgentPrompt(messages)`.
+`pi.sendMessage(..., { deliverAs: "nextTurn" })` (the extension API; it calls
+`AgentSession.sendCustomMessage()` internally). Buffering for `nextTurn` lets
+an extension attach context to the *next* fresh user prompt — for example,
+notes a command just computed — instead of injecting into a run that is
+already active.
+
+The three delivery modes that appear in this chapter:
+
+| Delivery mode | Buffered when | Delivered when | Selected with |
+|---|---|---|---|
+| `steer` | While a run is streaming | After the current assistant response and its tool work finish, before the next provider request | Enter while streaming; `sendUserMessage(text, { deliverAs: "steer" })` |
+| `followUp` | While a run is streaming | Only when the run has no more tool calls or steering messages and would otherwise stop | Alt+Enter while streaming; `{ deliverAs: "followUp" }` |
+| `nextTurn` | Any time, by an extension | Appended to the next fresh user prompt; never interrupts or triggers a run | `pi.sendMessage(msg, { deliverAs: "nextTurn" })` |
+
+Next the session emits `before_agent_start`, whose handlers can add custom
+messages and chain a system-prompt override, then calls
+`_runAgentPrompt(messages)`. A minimal handler:
+
+```typescript
+pi.on("before_agent_start", async (event) => {
+  return {
+    // Extra message the model will see (persisted in the session):
+    message: { customType: "my-ext", content: "Extra context", display: true },
+    // Chained system-prompt override for this turn:
+    systemPrompt: event.systemPrompt + "\n\nPrefer small, reversible edits.",
+  };
+});
+```
 
 `_runAgentPrompt()` calls `Agent.prompt()`; the reusable Agent API is detailed
 in [Agent core](#sec:agent-core). It can later call `Agent.continue()`
@@ -187,18 +251,13 @@ flowchart TD
 | Extension context transform | `Agent`'s `transformContext` callback, wired to the extension `context` event | An adjusted `AgentMessage[]` list before provider conversion |
 | LLM/provider conversion | `convertToLlm()` followed by `streamFn`/`streamSimple()` | A provider-compatible `Context`, then the provider's assistant event stream |
 
-These are three transformations for an already-selected model, not three
-model-selection steps. The narrative below follows the same order.
-
-Model choice is not part of this stage. The initial model is chosen earlier,
+One scoping note for everything below: the model was already chosen earlier,
 during `createAgentSession()` in `core/sdk.ts` (session restore, configured
-default, or `findInitialModel()`), before `new Agent(...)`. The session can
-later change `Agent.state.model` (for example through `/model`). When a run
-starts, `Agent.prompt()` snapshots the then-current model together with the
-system prompt, tools, and transcript. Each assistant request in that run uses
-that already-chosen model plus messages accumulated by the loop. The three
-boundaries below therefore transform context *for* a chosen model; they do not
-select one.
+default, or `findInitialModel()`), and `Agent.prompt()` snapshots that model
+together with the system prompt, tools, and transcript when a run starts.
+These three boundaries transform context *for* that already-chosen model; they
+never select one. (The session can still change `Agent.state.model` later, for
+example through `/model`.)
 
 First, the coding agent builds a base system prompt in
 `AgentSession._rebuildSystemPrompt()`. That method combines the working
@@ -209,26 +268,35 @@ text. Changing active tools rebuilds the base prompt, so tool prompt metadata
 can affect the next model turn.
 
 Immediately before *each* model request, `streamAssistantResponse()` in
-`agent-loop.ts` crosses the other two boundaries in sequence. It calls the
-optional `transformContext` callback on `AgentMessage[]`, then calls
-`convertToLlm()` to produce provider-compatible `Message[]`. Coding-agent
-supplies both callbacks when creating `Agent` in `core/sdk.ts`:
+`agent-loop.ts` crosses the other two boundaries in sequence. The distinction
+that matters: `transformContext` works on Pi's rich `AgentMessage[]` list (the
+union from Stage 3, including custom message types), while `convertToLlm()`
+converts that list into the plain, provider-compatible `Message[]` the
+provider API accepts. Coding-agent supplies both callbacks when creating
+`Agent` in `core/sdk.ts`:
 
-- `transformContext` dispatches the extension `context` event.
+- `transformContext` dispatches the extension `context` event. A handler
+  receives a deep copy of the message list and returns a replacement, so it
+  can reshape what the model is about to see per request — for example,
+  pruning stale scratchpad messages:
+
+  ```typescript
+  pi.on("context", async (event) => {
+    // event.messages: deep copy of the AgentMessage[] list; safe to modify.
+    return { messages: event.messages.filter((m) => !isStaleScratchpad(m)) };
+  });
+  ```
+
 - `convertToLlm` filters and normalizes coding-agent-specific message types.
-  When `blockImages` is enabled, this conversion-time step replaces image
-  content in converted user and tool-result messages with a text placeholder,
-  immediately before provider dispatch. It is dynamic, so a setting change
-  affects subsequent conversions.
+  When `blockImages` (the `images.blockImages` setting in `settings.json`) is
+  enabled, this conversion-time step replaces image content in converted user
+  and tool-result messages with a text placeholder, immediately before
+  provider dispatch. It is dynamic, so a setting change affects subsequent
+  conversions.
 
-The resulting `Context` has exactly `systemPrompt`, `messages`, and `tools`.
-That shape lets the session persist rich UI-only entries while only a selected
-representation reaches the LLM.
-
-When `streamAssistantResponse()` then invokes the installed stream function, it
-passes the *already* snapshotted model together with that normalized context.
-Provider dispatch (Stage 5) resolves credentials and an adapter for that model;
-context construction only prepares the adapter input.
+The resulting [`Context`](#sec:glossary) has exactly `systemPrompt`,
+`messages`, and `tools`. That shape lets the session persist rich UI-only
+entries while only a selected representation reaches the LLM.
 
 **Why an extension author cares:** the `context` event is where you reshape the
 message list the model is about to see — per request, not just at run start.
@@ -239,29 +307,50 @@ message list the model is about to see — per request, not just at run start.
 to a small dispatch function, which adds credentials and headers and picks the
 provider adapter that speaks the vendor's wire protocol.
 
+::: {.callout-note}
+## Skippable on first read
+This stage dives into credential and header resolution. The one thing to
+remember on a first pass is where the three provider hooks fire; come back for
+the wiring details when you need them.
+:::
+
 This stage charts the coding-agent stream path from the snapshotted `Model` to a
 provider adapter. Model *catalog* selection and runtime changes belong to
-session creation and `/model` (see Stage 4's opening and
-`developer-guide/11-models-providers-and-auth.qmd`); they are not re-decided
-here.
+session creation and `/model` (see Stage 4's opening and [Models, providers,
+and authentication](#sec:models)); they are not re-decided here.
 
-Coding-agent installs a custom `streamFn` on `Agent` in `core/sdk.ts`. For each
-assistant request the path is:
+Coding-agent installs a custom `streamFn` on `Agent` in `core/sdk.ts`:
+`streamFn` is the function the agent loop calls for every model request, and it
+defaults to `streamSimple()` from the [compat layer](#sec:glossary) — the
+compatibility API in `packages/ai/src/compat.ts` that resolves a provider
+implementation from `model.api` and streams through it. For each assistant
+request the path is:
 
 1. `streamAssistantResponse()` (agent-loop) calls `streamFn(model, context,
    options)` with the snapshotted model and the Stage 4 `Context`.
-2. That `streamFn` resolves credentials with
-   `modelRegistry.getApiKeyAndHeaders(model)`, merges provider-attribution and
-   request headers (`mergeProviderAttributionHeaders`), then emits extension
-   `before_provider_headers` so handlers can mutate the assembled headers.
-3. `streamFn` calls `streamSimple(model, context, options)` from
-   `packages/ai/src/compat.ts`, passing `apiKey`, merged headers, timeouts, and
-   retries. Agent core also forwards `onPayload` / `onResponse` from the
-   `Agent` instance into those options (wired in `createLoopConfig()`).
-4. `compat.streamSimple` either delegates to built-in model support
-   (`compatModels.streamSimple`) when the model matches a registered builtin
-   API instance, or looks up the registered API provider by `model.api` and
-   calls that provider's `streamSimple`.
+2. The `streamFn` first resolves auth: it looks up credentials with
+   `modelRegistry.getApiKeyAndHeaders(model)` and merges provider-attribution
+   and request headers (`mergeProviderAttributionHeaders`). Then it emits the
+   extension `before_provider_headers` event so handlers can mutate the
+   assembled headers before anything is sent:
+
+   ```typescript
+   pi.on("before_provider_headers", (event, ctx) => {
+     // Add or override a header (mutate event.headers in place):
+     event.headers["x-session-id"] = ctx.sessionManager.getSessionId();
+     // Delete a header by setting it to null:
+     event.headers["X-OpenRouter-Title"] = null;
+   });
+   ```
+
+3. With headers ready, `streamFn` calls `streamSimple(model, context, options)`
+   from `packages/ai/src/compat.ts`, passing `apiKey`, merged headers,
+   timeouts, and retries. Agent core also forwards `onPayload` / `onResponse`
+   from the `Agent` instance into those options (wired in `createLoopConfig()`).
+4. `compat.streamSimple` picks the adapter: it either delegates to built-in
+   model support (`compatModels.streamSimple`) when the model matches a
+   registered builtin API instance, or looks up the registered API provider by
+   `model.api` and calls that provider's `streamSimple`.
 5. The adapter serializes the normalized context and returns a
    provider-independent assistant event stream. During that path:
    - `onPayload` becomes extension `before_provider_request` and may replace
@@ -273,7 +362,8 @@ assistant request the path is:
 credential lookup, OAuth state, and header sources used by step 2; its role in
 this stage is auth/header resolution for the chosen model, not model selection.
 
-The sequence below summarizes stages 3-6 for one turn of the running example:
+The sequence below summarizes stages 3-6 for one turn of the running example —
+the first model request after `"Read the config and fix the failing test"`:
 
 ```{mermaid}
 %%| label: fig-turn-sequence
@@ -295,7 +385,7 @@ sequenceDiagram
 Scope boundary for this chapter: the numbered path stops at adapter
 `streamSimple` and the three provider-extension insertion points. Vendor wire
 formats, transport negotiation, custom provider registration, and auth-storage
-details live in `developer-guide/11-models-providers-and-auth.qmd` and the
+details live in [Models, providers, and authentication](#sec:models) and the
 provider-hook reference in
 `packages/coding-agent/docs/extensions.md` (`before_provider_headers`,
 `before_provider_request`, `after_provider_response`). Those headers/payload
@@ -315,12 +405,13 @@ and republished as Pi's own events; the transcript you see typing out is those
 events being rendered.
 
 `streamAssistantResponse()` consumes the `AssistantMessageEventStream` with
-`for await`: this is the async-iteration boundary where provider deltas become
-agent events. The [Agent core](#sec:agent-core) chapter shows the same loop
-from the reusable runtime's point of view. It creates a partial assistant
-message on `start`, replaces that partial message as text/thinking/tool-call
-deltas arrive, and emits `message_start`, `message_update`, and `message_end`
-events.
+`for await`: this is the async-iteration boundary where provider deltas —
+the small partial chunks a provider emits, such as a few tokens of text at a
+time — become agent events. The [Agent core](#sec:agent-core) chapter shows
+the same loop from the reusable runtime's point of view. It creates a partial
+assistant message on `start`, replaces that partial message as text/thinking/
+tool-call deltas arrive, and emits `message_start`, `message_update`, and
+`message_end` events.
 
 `Agent.processEvents()` reduces those events into state and then awaits all
 subscribers. `AgentSession` bridges generic events to persistence, extensions,
@@ -328,9 +419,12 @@ and application behavior. `InteractiveMode` updates the visible transcript,
 current streaming row, tool rows, footer, and render requests. The TUI package
 performs the actual terminal rendering.
 
-The extension lifecycle maps directly onto this path: `agent_start`,
-`turn_start`, `message_start`, many `message_update` events, `message_end`,
-then later `turn_end` and `agent_end`.
+The extension lifecycle nests inside the run like this:
+
+1. One run: `agent_start` ... `agent_end`.
+2. Each turn inside the run: `turn_start` ... `turn_end`.
+3. Each message inside a turn: `message_start`, then many `message_update`
+   events as deltas arrive, then `message_end`.
 
 For canonical detail, use [Agent core](#sec:agent-core) for loop state and
 queue semantics, [Built-in tools](#sec:tools) for tool contracts,
@@ -346,43 +440,70 @@ example to stream progress into custom UI.
 
 **In plain terms:** when the model asks to run tools, Pi checks each request
 against the tool's schema, lets extensions veto or modify it, executes it, and
-appends the result where the model can see it.
+appends the result where the model can see it. In the running example, this is
+where the model's `read` call on the config file is checked and executed.
 
 After a final assistant message, `agent-loop.ts` filters content blocks whose
 `type` is `"toolCall"`. A `"length"` stop means the token limit cut off the
-assistant output, so any tool call may contain truncated JSON arguments even if
-its parsed block appears complete. The loop therefore fails every tool call in
-that message rather than risk side effects from incomplete arguments.
+assistant output, so any tool call may contain truncated JSON arguments — for
+example `{"path": "src/comp` — even if its parsed block appears complete. The
+loop therefore fails every tool call in that message rather than risk side
+effects from incomplete arguments.
 
 For each normal tool call, the loop's short pipeline is:
 
 1. Emit `tool_execution_start`, look up the active tool, and prepare and
-   validate its arguments against the TypeBox schema.
+   validate its arguments against the TypeBox schema (a runtime validation
+   schema; see [TypeBox](#sec:glossary)).
 2. Run the `beforeToolCall` gate (coding-agent's `tool_call` event), then call
    `tool.execute(id, args, signal, onUpdate)`.
 3. Turn `onUpdate` values into update events, apply the `afterToolCall`
    (`tool_result`) patch, emit `tool_execution_end`, and append a `toolResult`
    message.
 
+The `tool_call` gate is where an extension can veto or rewrite a call before
+anything executes. This example rejects dangerous `bash` commands:
+
+```typescript
+pi.on("tool_call", async (event) => {
+  if (event.toolName === "bash" && /\brm\s+-rf\b/.test(String(event.input.command))) {
+    // The model receives this reason as an error toolResult and can recover.
+    return { block: true, reason: "Refusing to run rm -rf" };
+  }
+  // Mutating event.input in place would instead rewrite the arguments.
+});
+```
+
 See [Built-in tools](#sec:tools) for the contract and [Extension event
 reference](#sec:events) for payloads and hook ordering.
 
-Agent core defaults `toolExecution` to `"parallel"`
-(`options.toolExecution ?? "parallel"` in `packages/agent/src/agent.ts`; see
-[Agent core](#sec:agent-core) for the ordering contract).
-Coding-agent's `new Agent({...})` in `core/sdk.ts` does not pass
-`toolExecution`, so that default remains. A caller of agent core can select
-sequential execution, and a tool declaring `executionMode: "sequential"` makes
-its containing batch sequential. Otherwise, preflight happens in assistant
-source order, successful tool executions may run concurrently, and final
-`toolResult` messages are emitted in assistant source order. Start/update/end
-event ordering differs in parallel mode; see the extension documentation
-before using sibling tool results as state.
+Tool execution defaults to parallel. Agent core sets `toolExecution` to
+`"parallel"` (`options.toolExecution ?? "parallel"` in
+`packages/agent/src/agent.ts`; see [Agent core](#sec:agent-core) for the
+ordering contract), and coding-agent's `new Agent({...})` in `core/sdk.ts`
+does not override it. A caller of agent core can select sequential execution,
+and a tool declaring `executionMode: "sequential"` makes its containing batch
+sequential.
+
+In parallel mode the ordering guarantees are: [preflight](#sec:glossary) (the
+`beforeToolCall` / `tool_call` gate each call passes through before any tool
+runs) happens in assistant source order; successful tool executions may run
+concurrently; and final `toolResult` messages are emitted in assistant source
+order.
+
+::: {.callout-warning}
+Start/update/end event ordering differs in parallel mode: `tool_execution_end`
+fires in tool completion order, so a `tool_call` or `tool_result` handler is
+not guaranteed to see sibling tool results from the same assistant message.
+See the extension documentation before using sibling tool results as state.
+:::
 
 Built-in tools are supplied by coding-agent. They are ordinary tools at this
 boundary, which is why an extension can add a tool or override a built-in one.
 Custom filesystem-mutating tools must participate in
-`withFileMutationQueue()` to avoid lost writes when sibling tools run in
+`withFileMutationQueue()` — a per-path async queue from
+`packages/coding-agent/src/core/tools/file-mutation-queue.ts` that serializes
+writes to the same file — to avoid lost writes when sibling tools run in
 parallel; the [Built-in tools](#sec:tools) chapter has the runnable queue
 skeleton.
 
@@ -393,7 +514,10 @@ what the model sees afterwards.
 ## Stage 8: Results create the next agent action
 
 **In plain terms:** tool results go back to the model; final text ends the turn
-unless someone — you, via steering or follow-up — has queued more to say.
+unless someone — you, via steering or follow-up — has queued more to say. In
+the running example, the `read` result returns here and starts the turn where
+the model calls `bash` to run the test; when the model finally answers with
+plain text, this is where the run decides to stop.
 
 Each final tool result is appended to the in-memory agent context and becomes
 the model-facing material for the next turn. If at least one tool call was
@@ -434,16 +558,23 @@ change the screen, never the model loop.
 As message events complete, `AgentSession` records them through its
 `SessionManager`. The session is a JSONL tree, so the persisted form can later
 rebuild a branch and compact context. Model and thinking-level changes are also
-session entries. Extension state added with `appendEntry()` is persisted as a
-custom entry but remains outside LLM context.
+session [entries](#sec:glossary). Extension state added with `appendEntry()`
+is persisted as a custom entry — [durable](#sec:glossary) across restarts and
+reloads — but remains outside LLM context.
 
 `InteractiveMode.handleEvent()` responds to the same event stream. Assistant
 updates request transcript updates for the streaming message; tool lifecycle
 events manage pending tool rows; finalized messages become permanent transcript
 components. Renderer registration lets an extension replace the display of its
 custom messages, entries, or tool calls/results without changing how the model
-loop works. This chapter stops at that event-to-component boundary; the title
-intentionally does not promise terminal rendering internals.
+loop works.
+
+::: {.callout-note}
+## Scope note
+This chapter stops at the event-to-component boundary: how events request
+transcript updates, not how the terminal paints them. Terminal rendering
+internals live in `packages/tui` and [Terminal UI](#sec:tui).
+:::
 
 **Why an extension author cares:** `appendEntry()` persists your state without
 polluting model context, and renderer registration controls how your custom
@@ -475,20 +606,30 @@ stateDiagram-v2
 ```
 
 The low-level loop deliberately separates provider failures from tool
-failures: a provider error or abort ends the run with an assistant message,
-whereas a schema error, blocked call, or thrown tool execution becomes an
-error `toolResult` that the model can recover from. Esc aborts the active
-`AbortController`; provider, tool, and extension work must honor the signal.
-For the complete recovery matrix, see [Failure and recovery](#sec:failure).
+failures:
+
+| Failure type | What the model sees | Recovery path |
+|---|---|---|
+| Provider error or abort | An assistant message with `stopReason` `"error"` or `"aborted"` | The low-level run ends; `AgentSession` may retry automatically |
+| Tool schema error, blocked call, or thrown execution | An error `toolResult` message | The model sees the failure and can recover in a later turn |
+
+Esc aborts the active `AbortController`; provider, tool, and extension work
+must honor the signal. For the complete recovery matrix, see [Failure and
+recovery](#sec:failure).
 
 Above this boundary, `AgentSession` may retry, compact older context, rebuild
 it, and continue; [Sessions and context](#sec:sessions) explains compaction.
 Session replacement or process exit emits `session_shutdown`, where
 session-bound resources should be cleaned up. `agent_end` means the current
 low-level loop stopped. `agent_settled` is later: Pi has no automatic retry,
-compaction retry, or queued continuation left. Status integrations and cleanup
-that require true idleness should use `agent_settled` or `ctx.waitForIdle()` in
-a command context.
+compaction retry, or queued continuation left.
+
+One automatic retry makes the difference concrete: the provider errors, so
+`agent_end` fires for the first low-level run; `AgentSession` retries and the
+second run completes, so `agent_end` fires again; only then does
+`agent_settled` fire — twice for `agent_end`, once for `agent_settled`. Status
+integrations and cleanup that require true idleness should use `agent_settled`
+or `ctx.waitForIdle()` in a command context.
 
 **Why an extension author cares:** honor the abort signal in your own async
 work, clean up session-bound resources on `session_shutdown`, and use
@@ -499,10 +640,14 @@ work, clean up session-bound resources on `session_shutdown`, and use
 All source paths in this chapter are relative to the repository root. For a
 live trace, start at these symbols in order:
 
-1. `InteractiveMode.run()` and `getUserInput()`.
-2. `AgentSession.prompt()` and `_runAgentPrompt()`.
-3. `Agent.prompt()`, `createLoopConfig()`, and `processEvents()`.
-4. `runAgentLoop()`, `streamAssistantResponse()`, and `executeToolCalls()`.
+1. `InteractiveMode.run()` and `getUserInput()` in
+   `packages/coding-agent/src/modes/interactive/interactive-mode.ts`.
+2. `AgentSession.prompt()` and `_runAgentPrompt()` in
+   `packages/coding-agent/src/core/agent-session.ts`.
+3. `Agent.prompt()`, `createLoopConfig()`, and `processEvents()` in
+   `packages/agent/src/agent.ts`.
+4. `runAgentLoop()`, `streamAssistantResponse()`, and `executeToolCalls()` in
+   `packages/agent/src/agent-loop.ts`.
 5. `streamSimple()` in `packages/ai/src/compat.ts`.
 6. The `streamSimple` function in the selected provider API adapter.
 
@@ -527,3 +672,20 @@ can rely on; the source symbols above show which layer makes each guarantee.
 
 This table is the bridge into the extension recipes. Use the [extension event
 reference](#sec:events) for exact payloads and return values.
+
+## Try it
+
+1. Write an extension that logs every tool gate:
+   `pi.on("tool_call", async (event) => console.log(event.toolName, event.input))`.
+   Load it with `pi -e ./log-tools.ts`, ask Pi to read a file, and answer:
+   which stage does `tool_call` fire in, and which events fire immediately
+   before and after it? (Check your answer against the timeline in
+   `packages/coding-agent/docs/extensions.md`.)
+2. Using the delivery-mode table in Stage 3, predict what happens when you
+   type a message and press Enter while Pi is mid-stream, then do it and
+   confirm the message is injected before the next provider request, not
+   appended at the end.
+3. Load the Stage 7 `tool_call` block example, ask Pi to remove a scratch
+   directory with `rm -rf`, and confirm two things: the command never runs,
+   and the model receives your `reason` as an error `toolResult` it can
+   respond to.

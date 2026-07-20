@@ -1,14 +1,25 @@
 # Customizing Pi {#sec:resources}
 
-In plain terms: Pi offers settings, reusable instructions, themes, packages,
-and extensions. Start with the smallest mechanism that fits: configuration for
-values, prose resources for model guidance, themes for presentation, and code
-only when behavior must run at a lifecycle boundary.
+In plain terms: Pi offers settings, reusable instructions, themes,
+[packages](#sec:glossary), and extensions. Start with the smallest mechanism
+that fits: configuration for values, prose resources for model guidance, themes
+for presentation, and code only when behavior must run at a lifecycle boundary
+(a named point in the prompt lifecycle where extension code can run; see
+[The prompt lifecycle](#sec:prompt-lifecycle)).
 
 This chapter covers the no-code and low-code end of that spectrum. It is
 grounded in `packages/coding-agent/src/core/settings-manager.ts`,
 `src/core/resource-loader.ts`, and `src/core/trust-manager.ts`; the user-facing
 reference is `packages/coding-agent/docs/settings.md`.
+
+## Prerequisites
+
+You need a working Pi install with a signed-in provider
+([Using Pi day to day](#sec:using-pi); verify with `pi --version`). This
+chapter reuses the slash commands introduced there—`/settings`, `/trust`,
+`/reload`—and refers to compaction and tree navigation from
+[Sessions, trees, and compaction](#sec:sessions). To follow the examples,
+create a scratch project directory and run `pi` inside it.
 
 ## A day-one scenario
 
@@ -18,7 +29,8 @@ Each maps to a different mechanism:
 
 - Cheaper model → a **setting** (`defaultModel` in `.pi/settings.json`).
 - Review skill → a **resource** (a `SKILL.md` file Pi discovers).
-- Lint gate → an **extension** (code that runs at a lifecycle boundary).
+- Lint gate → an **extension** (code that runs at a lifecycle boundary,
+  covered from [Architecture](#sec:architecture) onward).
 
 The rest of this chapter defines these terms precisely and shows where each
 file lives.
@@ -27,9 +39,10 @@ file lives.
 
 A **resource** is something Pi discovers at startup, such as the review skill
 above, or a prompt, theme, or extension. A **setting** is configuration that
-changes how Pi runs, such as `defaultModel`. **Trust** is the decision that
-permits project-local code or settings to load. A **scope** is where a value
-applies, usually global or project-local.
+changes how Pi runs, such as `defaultModel`. [**Trust**](#sec:glossary) is the
+decision that permits project-local code or settings to load. A
+[**scope**](#sec:glossary) is where a value applies, usually global or
+project-local.
 
 In the scenario, the skill supplies instructions, the lint-gate extension
 executes code, and `.pi/settings.json` enables both. They may arrive from the
@@ -53,7 +66,8 @@ than from you, Pi gates them behind a trust decision; see
 [Trust is an execution policy, not a cosmetic prompt](#sec:trust) below.
 
 Project values take precedence over global values. For a top-level
-object-valued setting, `deepMergeSettings()` combines the global and project
+object-valued setting, `deepMergeSettings()` in `src/core/settings-manager.ts`
+combines the global and project
 objects one level deep: project properties replace same-named global
 properties, while other global properties remain. This is a shallow merge at
 the setting's top level, not a recursive merge of nested objects.
@@ -113,10 +127,13 @@ object replaces the global one, so `baseDelayMs` is lost. Restate nested
 fields you still need.
 
 When a merged value surprises you, work from the effective value back to its
-source. In interactive mode, `/settings` shows the current effective values
-for common settings; then compare `~/.pi/agent/settings.json` and
-`.pi/settings.json` to see which scope set a value. Remember that a value
-absent from the project file may still be the global one winning by omission.
+source in three steps:
+
+1. Run `/settings` in interactive mode to see the current effective values for
+   common settings.
+2. Open `.pi/settings.json` and check whether the project scope sets the value.
+3. Open `~/.pi/agent/settings.json`: a value absent from the project file may
+   still be the global one winning by omission.
 
 ## Settings that alter runtime behavior
 
@@ -127,26 +144,62 @@ semantics and should be considered part of a reproducible project setup.
 
 `defaultProvider`, `defaultModel`, `defaultThinkingLevel`,
 `enabledModels`, and `thinkingBudgets` influence startup selection, model
-cycling, and provider options. A saved session model takes precedence during a
-resume if it is still configured and authenticated; defaults are a fallback.
+cycling, and provider options. (`defaultThinkingLevel` and `thinkingBudgets`
+control the thinking level whose border color you saw in
+[Using Pi day to day](#sec:using-pi).) A saved session model takes precedence
+during a resume if it is still configured and authenticated; defaults are a
+fallback.
+
+```json
+{
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-sonnet-4-20250514",
+  "defaultThinkingLevel": "high",
+  "enabledModels": ["claude-*", "gpt-4o"]
+}
+```
 
 ### Compaction and branch summary
 
 `compaction.enabled`, `reserveTokens`, and `keepRecentTokens` determine when
-and how much conversation is summarized. `branchSummary.reserveTokens` and
-`skipPrompt` affect tree navigation. These settings change what reaches a
+and how much conversation is summarized (the mechanics are in
+[Sessions, trees, and compaction](#sec:sessions)). `branchSummary.reserveTokens`
+and `skipPrompt` affect tree navigation. These settings change what reaches a
 provider, so they are not merely transcript retention preferences.
+
+```json
+{
+  "compaction": { "enabled": true, "reserveTokens": 16384, "keepRecentTokens": 20000 },
+  "branchSummary": { "skipPrompt": true }
+}
+```
 
 ### Retry and delivery
 
 These settings control how long Pi waits after a failure and how queued
-messages are ordered—both matter when reproducing a session. The `retry` block
-separates Pi's agent-level recovery from provider/SDK request retries. Provider
-retries default to zero so a long SDK delay does not silently take control away
-from session-level retry logic.
+messages are ordered—both matter when reproducing a session. Pi retries at two
+levels (see [Retry](#sec:glossary)): its own agent-level loop and the
+provider/SDK's per-request retries, configured separately under `retry` and
+`retry.provider`. Provider retries default to zero, so a long SDK delay does
+not silently take control away from Pi's session-level retry logic; the delay
+and backoff you observe are Pi's own.
 
-`steeringMode` and `followUpMode` determine whether each queue drains all
-messages together or one at a time. `transport`, `httpIdleTimeoutMs`, and
+```json
+{
+  "retry": {
+    "enabled": true,
+    "maxRetries": 3,
+    "baseDelayMs": 2000,
+    "provider": { "maxRetries": 0 }
+  }
+}
+```
+
+`steeringMode` and `followUpMode` determine whether the
+[steering](#sec:glossary) and [follow-up](#sec:glossary) queues drain all
+messages together or one at a time. `transport` selects the wire transport for
+providers that support more than one (`"sse"`, `"websocket"`,
+`"websocket-cached"`, or `"auto"`); `httpIdleTimeoutMs` and
 `websocketConnectTimeoutMs` bound provider connection and idle behavior.
 
 ### Shell, images, and terminal
@@ -157,20 +210,52 @@ provider request. Terminal image and rendering settings affect display but do
 not make an image model-capable; model input capabilities still control whether
 an image can be sent.
 
+```json
+{
+  "shellPath": "/bin/zsh",
+  "shellCommandPrefix": "shopt -s expand_aliases",
+  "images": { "autoResize": true }
+}
+```
+
 ## Skills and prompt templates on the input path
 
 `AgentSession.prompt()` gives extension commands first chance to handle slash
-input. It then emits the extension `input` hook. If input is not handled,
-Pi expands skill commands and prompt templates. That means a raw `/skill:name`
-is not necessarily the message sent to the model; it can become the skill's
-content plus user arguments.
+input. It then emits the extension `input` hook (hooks and extension events are
+covered in [The prompt lifecycle](#sec:prompt-lifecycle)). If input is not
+handled, Pi expands skill commands and prompt templates. That means a raw
+`/skill:name` is not necessarily the message sent to the model; it can become
+the skill's content plus user arguments.
+
+For example, using the review skill authored later in this chapter, you type:
+
+```text
+/skill:review focus on the retry logic
+```
+
+`_expandSkillCommand()` in `src/core/agent-session.ts` replaces the command
+with the skill file's body wrapped in a `<skill>` block, and appends your typed
+text. The model receives:
+
+```text
+<skill name="review" location=".pi/skills/review/SKILL.md">
+References are relative to .pi/skills/review.
+
+Review the staged changes (`git diff --cached`).
+Report bugs, security issues, and error-handling gaps.
+Do not modify files; report findings only.
+</skill>
+
+focus on the retry logic
+```
 
 `enableSkillCommands` (default `true`) controls interactive registration of
 skills as `/skill:name` slash commands and autocomplete entries. Setting it to
 `false` removes that interactive command surface; it does not unload skills from
 system-prompt construction, and `AgentSession` still expands a submitted
 `/skill:name` prompt into skill content. Here and below, `ctx` means the
-extension context passed to an extension hook, tool, or command. When debugging
+[extension context](#sec:glossary) passed to an extension hook, tool, or
+command. When debugging
 prompt content, inspect both `ctx.getSystemPromptOptions()` and the actual
 context event rather than searching only the typed text.
 
@@ -186,6 +271,27 @@ cwd-level file does not stop discovery in parent directories, but an
 `AGENTS.md` and `CLAUDE.md` in the same directory are not both loaded.
 `--no-context-files`/`-nc` disables this discovery.
 
+Concretely, for a session started in `/home/alice/team-app`:
+
+```text
+~/.pi/agent/AGENTS.md           <- global file, loaded first if present
+/home/alice/AGENTS.md           <- loaded: ancestors are checked root down to cwd
+/home/alice/team-app/AGENTS.md  <- loaded: first candidate in this directory
+/home/alice/team-app/CLAUDE.md  <- skipped: loses to AGENTS.md in the same directory
+```
+
+```{mermaid}
+%%| label: fig-context-discovery
+%%| fig-cap: "Context-file discovery: check the agent directory first, then each ancestor directory from the filesystem root down to the session cwd, taking the first matching candidate per directory."
+%%{init: {"flowchart": {"nodeSpacing": 16, "rankSpacing": 16}, "themeVariables": {"fontSize": "12px"}}}%%
+flowchart TD
+  agent["Check agent directory;<br/>load its first match"]
+  dirs["For each directory,<br/>filesystem root to cwd"]
+  load["Load that directory's<br/>first matching candidate"]
+  done["Hand loaded files<br/>to AgentSession"]
+  agent --> dirs --> load --> done
+```
+
 The loader provides loaded context files and skills to `AgentSession`.
 `_rebuildSystemPrompt()` is an internal helper; extensions should use
 `before_agent_start` to inspect or modify the prepared prompt. Internally,
@@ -199,9 +305,11 @@ The loader provides loaded context files and skills to `AgentSession`.
 
 `buildSystemPrompt()` turns those options into provider-independent system
 prompt text. The system prompt is rebuilt when the active tool set changes and
-when session resources reload. Extensions that replace the prompt in
-`before_agent_start` receive the already-built prompt and can chain a change,
-but should avoid discarding these inputs unintentionally.
+when session resources reload. An extension that handles `before_agent_start`
+receives this already-built prompt; to change it, read the prompt you are
+given, modify or append to it, and return the result. Discarding the built
+prompt and writing a replacement from scratch throws away the inputs listed
+above—usually unintentionally.
 
 ## Themes
 
@@ -209,9 +317,10 @@ Theme paths load JSON themes. Themes influence colors/formatting used by
 interactive components and extension renderers; they do not modify keybindings
 or component logic. An extension can query/change themes through `ctx.ui`, but
 should use semantic theme keys (`accent`, `warning`, `toolTitle`, and so on)
-instead of ANSI constants so the user's theme continues to work.
+instead of hardcoded ANSI escape codes (raw terminal color sequences) so the
+user's theme continues to work.
 
-### Resource categories
+## Resource categories
 
 The resource loader assembles several independently useful kinds of content:
 
@@ -222,7 +331,7 @@ The resource loader assembles several independently useful kinds of content:
 | Prompt template | User-invoked prompt expansion | `prompts/`, configured paths |
 | Theme | Terminal styling data | `themes/`, configured paths |
 | Context file | Instructions added to system-prompt construction | `AGENTS.md` and related loader results |
-| Package | Bundle containing the above | npm/git/local source |
+| [Package](#sec:glossary) | Bundle containing the above | npm/git/local source |
 
 These categories are not interchangeable. A theme changes presentation, while
 skills, prompts, and context files shape model behavior. When instructions are
@@ -250,8 +359,11 @@ Report bugs, security issues, and error-handling gaps.
 Do not modify files; report findings only.
 ```
 
-Save as `.pi/skills/review/SKILL.md` (or `~/.pi/agent/skills/review.md`) and it
-becomes available as `/skill:review` and in system-prompt skill listings.
+Save as `.pi/skills/review/SKILL.md` (or `~/.pi/agent/skills/review.md`),
+restart Pi or run `/reload`, and it becomes available as `/skill:review` and in
+system-prompt skill listings. The startup header lists loaded `AGENTS.md`
+files, prompt templates, skills, and extensions, so you can confirm discovery
+there.
 
 A **prompt template** is a Markdown file in `~/.pi/agent/prompts/` or
 `.pi/prompts/`; the filename becomes the `/name` command, and `$1`, `$@`, or
@@ -266,7 +378,8 @@ Summarize the PRs merged this week. Filter by author: $1.
 List each PR's intent and risk in one line.
 ```
 
-Save as `.pi/prompts/week.md` and invoke as `/week alice`.
+Save as `.pi/prompts/week.md`, restart Pi or run `/reload`, and invoke as
+`/week alice`.
 
 A **theme** is a JSON file in `~/.pi/agent/themes/` or `.pi/themes/`. It has a
 `name`, optional `vars` aliases, and a `colors` object. Every color token in
@@ -286,14 +399,18 @@ the built-in `dark.json` with values changed:
 ```
 
 The example is truncated for space; a real file must define all required
-`colors` tokens or validation rejects it. Select it with `"theme": "team-dark"`
-or via `/settings`.
+`colors` tokens or validation rejects it. Restart Pi or run `/reload` so the
+loader discovers the file, then select it with `"theme": "team-dark"` or via
+`/settings`.
 
 ## Trust is an execution policy, not a cosmetic prompt {#sec:trust}
 
-Repository-owned settings can select extensions and packages; skills can direct
-the model to run commands. Pi therefore asks for trust before it loads project
-configuration, installs project packages, or executes project extensions.
+This section covers what happens behind the trust decision: where it is
+stored, how noninteractive modes decide without a dialog, and how extensions
+participate. Repository-owned settings can select extensions and packages;
+skills can direct the model to run commands. Pi therefore asks for trust before
+it loads project configuration, installs project packages, or executes project
+extensions.
 
 At interactive startup, Pi looks for trust-requiring inputs and for a saved
 decision covering the current folder or one of its parents. If neither settles
@@ -304,7 +421,7 @@ extension code from those sources. Context instructions such as `AGENTS.md` and
 `CLAUDE.md` are the exception: they load regardless of trust unless context
 loading is disabled.
 
-Pi's noninteractive modes are:
+Pi's noninteractive [modes](#sec:modes) are:
 
 - **Print mode** (`-p` or `--print`) processes the initial prompt and exits.
 - **JSON mode** (`--mode json`) writes session events as JSON lines, with one
@@ -325,19 +442,46 @@ The CLI flags `--approve`/`-a` and `--no-approve`/`-na` override the decision
 for one run only. In CI, prefer `--approve` for a known checkout or configure a
 specific noninteractive policy rather than relying on an interactive prompt.
 
-> **Important:** `/trust` immediately writes the selected decision to
-`~/.pi/agent/trust.json`. The command changes persisted state for future Pi
-processes; it does not change the trust decision already resolved by the
-current process. A live `/reload` also keeps that already-resolved trust state,
-so a newly saved `/trust` answer does not start loading (or stop ignoring)
-project resources until Pi itself is restarted. A same-cwd session replacement
-such as `/new` likewise reuses the process-level decision rather than rereading
-`trust.json`.
+```{mermaid}
+%%| label: fig-trust-decision
+%%| fig-cap: "How Pi resolves project trust: a saved decision wins; otherwise interactive mode asks and noninteractive modes fall back to `defaultProjectTrust`."
+%%{init: {"flowchart": {"nodeSpacing": 16, "rankSpacing": 18}, "themeVariables": {"fontSize": "12px"}}}%%
+flowchart TD
+  start[Project startup] --> needed{Resources need<br/>trust?}
+  needed -->|no| free[Nothing to load]
+  needed -->|yes| saved{Saved decision?}
+  saved -->|trusted| trust[Load project resources]
+  saved -->|refused| ignore[Ignore project resources]
+  saved -->|none| ask["TUI asks;<br/>other modes use<br/>defaultProjectTrust"]
+```
 
-Before loading repository extensions, Pi emits `project_trust` only to
-user/global and CLI-provided extensions. A handler returns
-`trusted: "yes" | "no" | "undecided"`; the first yes/no response decides the
-outcome. Code awaiting approval therefore cannot approve itself.
+> **Important:** [`/trust`](#sec:using-pi) immediately writes the selected
+> decision to `~/.pi/agent/trust.json`. The command changes persisted state for
+> future Pi processes; it does not change the trust decision already resolved
+> by the current process. A live [`/reload`](#sec:using-pi) also keeps that
+> already-resolved trust state, so a newly saved `/trust` answer does not start
+> loading (or stop ignoring) project resources until Pi itself is restarted. A
+> same-cwd session replacement such as `/new` likewise reuses the process-level
+> decision rather than rereading `trust.json`.
+
+A saved decision is a map from normalized absolute folder paths to a boolean
+(`true` trusted, `false` refused). The nearest entry for the current folder or
+one of its parents applies:
+
+```json
+{
+  "/Users/alice/work/team-app": true,
+  "/Users/alice/tmp/scratch-project": false
+}
+```
+
+Extensions can also participate in the decision, which lets an organization
+enforce its own policy (for example, "trust only repositories under `~/work`").
+Before loading repository extensions, Pi emits the `project_trust` event—but
+only to user/global and CLI-provided extensions, because project extensions are
+the very thing being approved. A handler returns
+`{ trusted: "yes" | "no" | "undecided" }`; the first yes/no response decides
+the outcome. Code awaiting approval therefore cannot approve itself.
 
 ## Project configuration that an extension should respect
 
@@ -353,6 +497,31 @@ An extension with its own project-level configuration should:
 3. Call `ctx.isProjectTrusted()` before reading that configuration.
 4. Validate parsed JSON as untrusted data.
 5. Define which state is global, project-local, and session-local.
+
+A minimal global extension following steps 1–4:
+
+```ts
+// ~/.pi/agent/extensions/team-policy.ts
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { CONFIG_DIR_NAME, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+export default function (pi: ExtensionAPI) {
+	pi.on("session_start", async (_event, ctx) => {
+		// Step 3: never read project configuration without trust
+		if (!ctx.isProjectTrusted()) return;
+		// Steps 1-2: resolve the config directory name against the session cwd
+		const configPath = join(ctx.cwd, CONFIG_DIR_NAME, "team-policy.json");
+		if (!existsSync(configPath)) return;
+		// Step 4: parsed JSON is untrusted data; validate before using it
+		const config: unknown = JSON.parse(readFileSync(configPath, "utf-8"));
+		// ... validate config, then apply it
+	});
+}
+```
+
+Writing and loading extensions like this is covered end to end in
+[Your first extension](#sec:extensions).
 
 For example, a global extension may store user preferences in the agent
 directory but read a project allowlist only after trust. That matches Pi's own
@@ -395,9 +564,26 @@ Use the smallest mechanism that owns the behavior:
 | Change colors and visual style | Theme |
 | Change AI model/provider selection or static behavior | Settings or a custom provider |
 | Add a command, tool, lifecycle gate, state, custom UI, or request hook | Extension |
-| Reuse Pi from another Node program | Coding-agent SDK (`createAgentSession`) |
+| Reuse Pi from another Node program | Coding-agent SDK (`createAgentSession`; see [Run modes, SDK embedding, and operational boundaries](#sec:modes)) |
 | Change generic loop/provider/TUI behavior for every consumer | Core contribution in the owning package |
 
 When none of the first four mechanisms suffice, you are writing an extension.
 The next two chapters show the runtime it lives in and the lifecycle points
 where it can act.
+
+## Try it
+
+Close the day-one scenario from the top of this chapter:
+
+1. In a scratch project, create `.pi/settings.json` containing
+   `{ "defaultModel": "claude-sonnet-4-20250514" }` (or another configured
+   model ID), restart `pi`, approve the trust prompt, and confirm the current
+   model in the footer changed.
+2. Write the review skill from the authoring section above to
+   `.pi/skills/review/SKILL.md`, run `/reload`, and confirm it appears in the
+   startup header and as a `/skill:review` autocomplete entry. Invoke it with
+   an argument and predict the expanded message the model receives.
+3. With at least one extension in `~/.pi/agent/extensions/`, add
+   `"extensions": []` to the project `.pi/settings.json` and predict whether
+   the global extension still loads. Restart `pi` and check the startup
+   header; then remove the key and compare.
