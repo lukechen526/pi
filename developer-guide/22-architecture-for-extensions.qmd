@@ -81,14 +81,15 @@ step names the real file that handles it:
 ```{mermaid}
 %%| label: fig-hello-pi-trace
 %%| fig-cap: "The /hello-pi trace. Each arrow crosses a package boundary; only the last one leaves the process."
-flowchart LR
-  U["user types<br/>/hello-pi"] --> IM["interactive mode<br/>(coding-agent)"]
-  IM --> CMD["extension command handler<br/>(extension in coding-agent)"]
-  CMD --> SES["AgentSession.prompt()<br/>(coding-agent)"]
-  SES --> LOOP["agentLoop<br/>(agent)"]
-  LOOP --> SS["streamSimple()<br/>(ai, compat.ts)"]
-  SS --> API["provider module<br/>(ai, api/)"]
-  API --> HTTP["provider HTTPS API"]
+flowchart TD
+  IM["interactive mode (coding-agent)<br/>user types /hello-pi"]
+  CMD["extension command handler (extension)"]
+  SES["AgentSession.prompt() (coding-agent)"]
+  LOOP["agent loop (agent)"]
+  SS["streamSimple() to provider module (ai)"]
+  HTTP["provider HTTPS API"]:::prov
+  IM --> CMD --> SES --> LOOP --> SS --> HTTP
+  classDef prov fill:#dbe7f5,stroke:#2f5b8f,color:#000000
 ```
 
 The same six steps apply to any extension command that triggers a model turn;
