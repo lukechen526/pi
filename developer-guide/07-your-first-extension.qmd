@@ -35,7 +35,7 @@ copying every feature at once.
 
 ## Choose the right customization mechanism
 
-Before writing code, read [Which mechanism do you need?](21-customizing-pi.qmd#which-mechanism-do-you-need). An extension is powerful, but do not use one to recreate or patch Pi internals as an unreviewed fork. Favor public `ExtensionAPI` methods over importing coding-agent internals.
+Before writing code, read [Which mechanism do you need?](04-customizing-pi.qmd#which-mechanism-do-you-need). An extension is powerful, but do not use one to recreate or patch Pi internals as an unreviewed fork. Favor public `ExtensionAPI` methods over importing coding-agent internals.
 
 ## Discovery, trust, and loading
 

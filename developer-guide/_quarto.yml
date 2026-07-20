@@ -15,33 +15,33 @@ book:
     - part: "Using Pi effectively"
       chapters:
         - 02-using-pi-day-to-day.qmd
-        - 20-sessions-trees-compaction.qmd
-        - 21-customizing-pi.qmd
+        - 03-sessions-trees-compaction.qmd
+        - 04-customizing-pi.qmd
     - part: "How Pi works"
       chapters:
-        - 22-architecture-for-extensions.qmd
-        - 23-lifecycle-and-hooks.qmd
+        - 05-architecture-for-extensions.qmd
+        - 06-lifecycle-and-hooks.qmd
     - part: "Building extensions"
       chapters:
-        - 24-your-first-extension.qmd
-        - 25-extension-patterns.qmd
-        - 26-packaging-and-distribution.qmd
+        - 07-your-first-extension.qmd
+        - 08-extension-patterns.qmd
+        - 09-packaging-and-distribution.qmd
     - part: "Subsystem deep dives"
       chapters:
-        - 08-built-in-tools.qmd
-        - 09-models-providers-and-auth.qmd
-        - 10-agent-core.qmd
-        - 11-tui-and-interactive-mode.qmd
-        - 15-modes-sdk-and-operations.qmd
+        - 10-built-in-tools.qmd
+        - 11-models-providers-and-auth.qmd
+        - 12-agent-core.qmd
+        - 13-tui-and-interactive-mode.qmd
+        - 14-modes-sdk-and-operations.qmd
     - part: "Practice and reference"
       chapters:
-        - 12-testing-debugging-and-contribution.qmd
-        - 13-guided-source-tours.qmd
-        - 14-extension-event-reference.qmd
-        - 16-failure-and-recovery-reference.qmd
-        - glossary.qmd
+        - 15-testing-debugging-and-contribution.qmd
+        - 16-guided-source-tours.qmd
+        - 17-extension-event-reference.qmd
+        - 18-failure-and-recovery-reference.qmd
+        - 19-glossary.qmd
   appendices:
-    - 17-typescript-foundations-workbook.qmd
+    - A1-typescript-foundations-workbook.qmd
 
 format:
   pdf:

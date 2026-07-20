@@ -15,11 +15,11 @@ work:
 
 | Intent | Route |
 |---|---|
-| **Build a first extension** | [Setup](#quick-start) → [the runnable extension](24-your-first-extension.qmd#a-complete-first-extension) → [extension patterns](#sec:customization) |
+| **Build a first extension** | [Setup](#quick-start) → [the runnable extension](07-your-first-extension.qmd#a-complete-first-extension) → [extension patterns](#sec:customization) |
 | **Contribute to core** | [quick Pi TypeScript](#sec:typescript) → [architecture](#sec:architecture) → [prompt lifecycle](#sec:prompt-lifecycle) → [agent core](#sec:agent-core) → [built-in tools](#sec:tools) → [testing and contribution](#sec:testing) |
 | **Embed or automate Pi** | [architecture](#sec:architecture) → [models and authentication](#sec:models) → [modes and SDK](#sec:modes) → [failure and recovery](#sec:failure) |
 | **Customize without code** | [sessions and compaction](#sec:sessions) → [settings, skills, prompts, and themes](#sec:resources) |
-| **Learn TypeScript first** | [optional foundations workbook](17-typescript-foundations-workbook.qmd#sec:typescript-workbook) → [quick Pi TypeScript](#sec:typescript) → [architecture](#sec:architecture) |
+| **Learn TypeScript first** | [optional foundations workbook](A1-typescript-foundations-workbook.qmd#sec:typescript-workbook) → [quick Pi TypeScript](#sec:typescript) → [architecture](#sec:architecture) |
 
 The first route is for extension authors; the second follows ownership into the
 core runtime; the third emphasizes host boundaries; and the fourth is a
@@ -27,7 +27,7 @@ complete beginner route that returns to the shorter Pi chapter after the
 foundations.
 
 ::: {.callout-tip title="First success in 10–15 minutes"}
-Use the canonical [complete first extension](24-your-first-extension.qmd#a-complete-first-extension)
+Use the canonical [complete first extension](07-your-first-extension.qmd#a-complete-first-extension)
 rather than copying a second example into this index.
 
 1. Create the discovered location and save the linked `hello-pi.ts` listing:
@@ -177,7 +177,7 @@ the rendered order recorded in `developer-guide/_quarto.yml` and in
 ### Start here
 
 1. [TypeScript used by Pi](#sec:typescript) is the short route; the optional
-   [foundations workbook](17-typescript-foundations-workbook.qmd#sec:typescript-workbook)
+   [foundations workbook](A1-typescript-foundations-workbook.qmd#sec:typescript-workbook)
    is at the end as an appendix.
 
 ### Using Pi effectively

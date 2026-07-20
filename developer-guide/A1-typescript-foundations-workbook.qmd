@@ -68,11 +68,11 @@ you only need one chapter, the map shows which part to work first.
 
 | Workbook part | Where the skill is used |
 |---|---|
-| Part 1, everyday types | everywhere, especially [Architecture](22-architecture-for-extensions.qmd) |
-| Part 2, Pi patterns | [Agent core](10-agent-core.qmd) and [Extensions](24-your-first-extension.qmd) |
-| Part 3, TypeBox | [Extensions](24-your-first-extension.qmd), tool parameters |
-| Part 4, async and classes | [Prompt lifecycle](23-lifecycle-and-hooks.qmd) and [Agent core](10-agent-core.qmd) |
-| Part 5, apply the basics | [Testing and contribution](12-testing-debugging-and-contribution.qmd) |
+| Part 1, everyday types | everywhere, especially [Architecture](05-architecture-for-extensions.qmd) |
+| Part 2, Pi patterns | [Agent core](12-agent-core.qmd) and [Extensions](07-your-first-extension.qmd) |
+| Part 3, TypeBox | [Extensions](07-your-first-extension.qmd), tool parameters |
+| Part 4, async and classes | [Prompt lifecycle](06-lifecycle-and-hooks.qmd) and [Agent core](12-agent-core.qmd) |
+| Part 5, apply the basics | [Testing and contribution](15-testing-debugging-and-contribution.qmd) |
 
 ## What TypeScript checks—and what it erases
 
@@ -2601,7 +2601,7 @@ own control flow prefers returned unions such as `{ ok: true } | { ok: false }`
 where a caller must narrow. When you read Pi code, ask which convention the
 function chose: a thrown exception crosses layers, a returned union is
 handled by the immediate caller. The
-[failure and recovery reference](16-failure-and-recovery-reference.qmd) covers
+[failure and recovery reference](18-failure-and-recovery-reference.qmd) covers
 the runtime side: retries, cancellation during failure, and user-facing
 errors.
 
@@ -3022,7 +3022,7 @@ data looks like; it never fills in missing values for you.
 
 For string literals inside a tool contract, prefer the helper Pi ships for
 provider compatibility: `StringEnum([...])` instead of hand-written
-`Type.Union` of literals. [Your first extension](24-your-first-extension.qmd#stringenum-vs-typeunion-for-string-literals)
+`Type.Union` of literals. [Your first extension](07-your-first-extension.qmd#stringenum-vs-typeunion-for-string-literals)
 explains the difference and the schema policy.
 
 #### Reporting why a value failed: `Value.Errors`
@@ -3637,7 +3637,7 @@ registration from an extension factory
 ([The real registration in Pi](#the-real-registration-in-pi)), and a
 valid/invalid test pair for the guard. For the extension skeleton, the test
 and verification workflow, and a guided walkthrough, follow
-[A complete first extension](24-your-first-extension.qmd#a-complete-first-extension),
+[A complete first extension](07-your-first-extension.qmd#a-complete-first-extension),
 [Testing and contribution](#sec:testing), and
 [Guided source tours](#sec:tours). Reread the linked workbook section
 whenever a step is not routine; if every step felt routine, you are done with
@@ -3645,7 +3645,7 @@ this workbook.
 
 #### Ready for your first extension?
 
-You are ready for [Your first extension](24-your-first-extension.qmd#sec:extensions) when you can do each of these
+You are ready for [Your first extension](07-your-first-extension.qmd#sec:extensions) when you can do each of these
 without looking at an answer:
 
 - write a TypeBox schema for a tool's parameters and derive its static type
@@ -3669,7 +3669,7 @@ without looking at an answer:
   ([Testing and contribution](#sec:testing)).
 
 When all of these are comfortable, continue to
-[A complete first extension](24-your-first-extension.qmd#a-complete-first-extension).
+[A complete first extension](07-your-first-extension.qmd#a-complete-first-extension).
 
 **Moving on.** You can move on when you can open an unfamiliar Pi file and
 identify its imports, types, and runtime contracts, make a small change behind
