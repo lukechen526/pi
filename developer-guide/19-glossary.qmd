@@ -46,6 +46,14 @@ embedding. See [Modes, SDK, and operations](#sec:modes).
 : The way a host communicates with Pi: interactive TUI, print, JSON, or RPC.
 See [Modes, SDK, and operations](#sec:modes).
 
+**RPC mode**
+
+: A run mode where Pi exchanges LF-delimited JSON messages over stdin/stdout,
+so another process can drive it without a terminal. RPC stands for remote
+procedure call. When an extension opens a dialog in RPC mode, the client
+process receives an `extension_ui_request` message and must answer it,
+otherwise the dialog waits. See [Modes, SDK, and operations](#sec:modes).
+
 **AbortController / AbortSignal**
 
 : An `AbortController` owns cancellation; its `AbortSignal` is passed to work
@@ -61,6 +69,19 @@ provider's protocol format. See [Models, providers, and authentication](#sec:mod
 
 : One path through a session tree, represented by linked entries from an
 ancestor to a selected point. See [Sessions and durable context](#sec:sessions).
+
+**Entry**
+
+: One durable record in a session file: a single JSONL line with a `type`, an
+`id`, a `parentId`, and a timestamp. Messages, tool results, compaction and
+branch summaries, and extension state are all entries; linked by `parentId`
+they form the session tree. See [Sessions and durable context](#sec:sessions).
+
+**Durable**
+
+: Persisted to disk so it survives restarts, reloads, and session replacement.
+Session entries are durable; the per-turn model context rebuilt from them is
+not. See [Sessions and durable context](#sec:sessions).
 
 **Leaf**
 
@@ -95,6 +116,22 @@ reserves part of that budget for the response and compacts older session context
 when the available space is too small. See [Sessions and durable context](#sec:sessions)
 and [Models, providers, and authentication](#sec:models).
 
+**Barrel**
+
+: A module that only re-exports symbols from other modules, giving a package
+one public entry point — for example `packages/tui/src/index.ts`. Consumers
+import from the barrel instead of reaching into internal files. See
+[Architecture](#sec:architecture).
+
+**Compat layer**
+
+: The compatibility API in `packages/ai/src/compat.ts` — `stream()`,
+`streamSimple()`, and the api-registry — that resolves a provider
+implementation from `model.api` and streams a response through it. The
+`Agent` class calls its stream function (`streamFn`, defaulting to
+`streamSimple`) on every model request. See [Architecture](#sec:architecture)
+and [Models, providers, and authentication](#sec:models).
+
 **Extension**
 
 : A runtime-loaded TypeScript or JavaScript module that receives `ExtensionAPI`
@@ -116,6 +153,20 @@ Users invoke it as `/hello-pi`. It is not a `!` user-shell command. See
 : The `ctx` passed to hooks, tools, and commands, containing mode, cwd (current
 working directory), UI, session access, and model services. See
 [Extensions](#sec:extensions).
+
+**Factory**
+
+: The default-exported function of an extension module —
+`export default function (pi: ExtensionAPI) { ... }`. Pi calls it once per
+load, before session start, and it registers the extension's hooks, tools,
+commands, and other behavior. See [Extensions](#sec:extensions).
+
+**Hook**
+
+: An extension handler registered with `pi.on()` for a named lifecycle event,
+so it can observe or affect that occurrence — for example
+`pi.on("session_start", ...)`. Some hooks can also block or mutate what they
+observe. See [Extensions](#sec:extensions) and [Prompt lifecycle](#sec:prompt-lifecycle).
 
 **cwd / current working directory**
 
@@ -176,6 +227,13 @@ from a model, credential, or API adapter. See [Models and authentication](#sec:m
 : A reusable prompt snippet that can be expanded with context before a model
 request. See [Resources, settings, and trust](#sec:resources).
 
+**Package**
+
+: An installable bundle—from npm, git, or a local path—that contributes
+extensions, skills, prompts, and themes together as one unit. See [Resources,
+settings, and trust](#sec:resources) and [Packaging and sharing
+extensions](#sec:packages).
+
 **Resource loader**
 
 : The coding-agent service that discovers extensions, skills, prompts, themes,
@@ -200,6 +258,20 @@ still needs a runtime check to validate a value. See [TypeScript basics](#sec:ty
 live at `~/.pi/agent/settings.json`; project settings live at `.pi/settings.json`
 and are applied subject to project trust. See [Resources, settings, and trust](#sec:resources).
 
+**Scope**
+
+: Where a setting or resource applies: global (`~/.pi/agent`, all projects for
+the current user) or project (`.pi`, the current repository). Project values
+take precedence over global values; project resources load only after
+**trust**. See [Resources, settings, and trust](#sec:resources).
+
+**Trust**
+
+: The per-folder decision that permits project-local settings, resources, and
+extension code to load. Saved decisions live in `~/.pi/agent/trust.json`;
+interactive mode asks, and noninteractive modes fall back to the
+`defaultProjectTrust` setting. See [Resources, settings, and trust](#sec:resources).
+
 **Retry**
 
 : A later attempt after a failure. Provider/SDK retries and agent-level retries
@@ -210,6 +282,14 @@ and recovery](#sec:failure).
 
 : One continuous agent loop from submitted prompt through assistant responses,
 tool calls, and queued continuation until the agent becomes idle. See [Agent core](#sec:agent-core).
+
+**Preflight**
+
+: The sequential check each tool call passes through before any tool runs: the
+agent loop's `beforeToolCall` hook, and the extension `tool_call` handlers
+built on it. In the default parallel tool mode, calls are preflighted one at
+a time, then the allowed calls execute concurrently. See [Agent
+core](#sec:agent-core).
 
 **Session**
 
@@ -240,6 +320,17 @@ settings, and trust](#sec:resources).
 : A queued message injected after the current assistant response and tool work
 finish but before the next provider request. See [Prompt lifecycle](#sec:prompt-lifecycle).
 
+**`nextTurn` / `triggerTurn`**
+
+: Two delivery options on `pi.sendMessage()`. `deliverAs: "nextTurn"` queues a
+custom message to travel with the *next* user-originated prompt: it never
+interrupts the active run and never starts one by itself. `triggerTurn: true`
+starts an AI-model turn immediately when the agent is idle; without it, a
+`"steer"` or `"followUp"` message sent while idle is only appended to the
+session. `triggerTurn` is ignored for `"nextTurn"`. See [Prompt
+lifecycle](#sec:prompt-lifecycle) and [Extension
+patterns](#sec:customization).
+
 **System prompt**
 
 : The model-facing instruction context assembled from defaults, resources,
@@ -269,7 +360,15 @@ handlers and the UI. See [Agent core](#sec:agent-core) and [Extension event refe
 **Turn**
 
 : One model request and the tool work that follows it. A run can contain many
-turns. See [Prompt lifecycle](#sec:prompt-lifecycle).
+turns. In compaction, turn boundaries are delimited by user messages: a turn
+begins at a user message and ends just before the next one. See [Prompt
+lifecycle](#sec:prompt-lifecycle) and [Sessions and durable context](#sec:sessions).
+
+**Thinking level**
+
+: How much extended reasoning the model performs per response, selectable in
+the TUI (the editor border color indicates it) and recorded in the session as
+a `thinking_level_change` entry. See [Sessions and durable context](#sec:sessions).
 
 **TUI**
 
