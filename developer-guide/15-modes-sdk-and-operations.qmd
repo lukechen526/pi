@@ -1,5 +1,7 @@
 # Run modes, SDK embedding, and operational boundaries {#sec:modes}
 
+This is reference depth for extension hosts and operations; read it when embedding Pi or choosing a run mode.
+
 The `pi` binary is one host for the coding-agent runtime. The same session
 construction and event model can also serve print, JSON, RPC, and programmatic
 SDK use. Read [Sessions](#sec:sessions) for persistence and [Extensions](#sec:extensions)

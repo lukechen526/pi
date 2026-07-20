@@ -1,5 +1,7 @@
 # Models, providers, and authentication {#sec:models}
 
+This is reference depth for provider-adjacent extension patterns; read it when you need models, authentication, or custom providers.
+
 Use this chapter when a model is missing, a request fails auth, custom
 `models.json` overrides do not apply, thinking levels look wrong, cost/footer
 numbers surprise you, or you need to understand how Pi turns a selected model

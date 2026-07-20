@@ -1,11 +1,9 @@
 # Architecture: packages, ownership, and entry points {#sec:architecture}
 
-Pi separates generic agent machinery from the coding-agent application. If
-this is your first pass through the repository, start with [the short
-TypeScript route](#sec:typescript); JavaScript-only readers can use its optional
-[foundations workbook](17-typescript-foundations-workbook.qmd). The terms
-package, dependency, entry point, and boundary are also available in the
-[glossary](#sec:glossary).
+An extension runs inside the coding-agent package. This chapter shows what
+that package owns, what the lower layers provide, and why an extension can use
+public APIs instead of forking Pi. If needed, start with [the TypeScript
+route](#sec:typescript); terminology is available in the [glossary](#sec:glossary).
 
 A useful rule is: move a feature down only when it is genuinely useful outside
 the coding agent. The coding-agent package owns command-line behavior, local
@@ -54,24 +52,10 @@ JSON does not belong in the TUI.
 
 ## Repository-level conventions
 
-The root `package.json` defines npm workspaces for `packages/*` and selected
-extension examples. All packages are ESM (ECMAScript modules: files use
-`import`/`export` rather than CommonJS `require`). The root `tsconfig.json` maps public
-package names back to source files for whole-repository checking. Each package
-has its own `package.json` with public exports and build script. Release
-versioning is lockstep: all packages share one version and release together.
-
-When developing inside this checkout, import the public package name if you
-are crossing a package boundary. Use a relative `.ts` import only within a
-package. This preserves the boundary that published consumers see.
-
-The normal quality gate after code changes is `npm run check`. Per repository
-rules, do not run `npm run build` or the full test suite merely as a habit;
-use the requested or relevant targeted validation. Guide verification is
-different because QMD links, code wrapping, tables, and PDF navigation are
-rendered artifacts rather than TypeScript compilation: for a documentation-only
-change, run `quarto render developer-guide` from the repository root;
-`npm run check` does not render this book.
+The root `package.json` defines npm workspaces. Packages are ESM, and public
+package names map back to source during development. An extension should import
+published package names for public types and APIs; use relative imports only
+inside the same package. This preserves the boundary installed users see.
 
 ## Component walkthrough
 
@@ -198,11 +182,8 @@ documented for that purpose.
 **You work here when** a change concerns multi-process orchestration, not
 normal prompt processing. This package is experimental.
 
-`packages/orchestrator` depends on coding-agent and exports configuration,
-handlers, IPC client/server/protocol, process supervision, storage, and serve
-functions from `src/index.ts`. Its manifest describes it as experimental.
-Treat it as a separate surface for multi-process orchestration, not as a hidden
-step of normal prompt processing.
+It is experimental and outside the normal extension path. Treat it as a
+separate surface for multi-process orchestration, not as a hidden prompt stage.
 
 ## Constructing a running coding-agent session
 
@@ -278,7 +259,7 @@ The full reference table:
 | Add keyboard/editor/component capability reusable by TUIs | Terminal primitive, not Pi policy | `packages/tui/src/` |
 | Change Pi commands, session behavior, built-in tool policy | Application behavior or configuration | `packages/coding-agent/src/` |
 | Set values without adding executable behavior | **Configuration** in `settings.json` | Settings and resource-loading code |
-| Add a command, tool, hook, state, or request behavior | **Extension** loaded at runtime | Public `ExtensionAPI` and `04-extensions.qmd` |
+| Add a command, tool, hook, state, or request behavior | **Extension** loaded at runtime | Public `ExtensionAPI` and `24-your-first-extension.qmd` |
 | Give the model reusable procedural guidance | **Skill** loaded as contextual instructions | Resource loader and `skills/` |
 | Change colors and visual style | **Theme** consumed by renderers | Theme resources and TUI renderers |
 | Reuse a written user/model request | **Prompt** template or slash command | Prompt resources and command registration |
