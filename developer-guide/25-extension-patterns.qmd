@@ -1,4 +1,8 @@
-# From demo to production extension {#sec:customization}
+# Extension patterns: basic to advanced {#sec:customization}
+
+Patterns progress by surface area: **basic** patterns observe or intercept; **intermediate** patterns add tools or durable state; **advanced** patterns add custom UI, providers, or mode-aware behavior. Start with the smallest tier that solves the task. A hook that must remember something has entered tier 2.
+
+## Tier 1 - Basic: observe and intercept
 
 This chapter is the production follow-up to [Extensions: change Pi without
 forking it](#sec:extensions). Start with the safety gate, then adapt the
@@ -49,7 +53,7 @@ honest; Pi does not run a second schema validation after a hook mutates input.
 The shipped `permission-gate.ts` example follows the same order. Test both the
 allow and deny paths, including the no-UI fallback, before adding more behavior.
 
-## Configuration before code
+## Tier 3 - Advanced: configuration before code
 
 Pi configuration is layered. Read the layers from broadest to narrowest:
 
@@ -83,7 +87,7 @@ load; declining trust skips them. Trust is an input-loading decision, not a
 sandbox for subsequent tool execution. A global extension should call
 `ctx.isProjectTrusted()` before honoring project-local configuration of its own.
 
-## Pattern: inject focused context, not a second system
+## Tier 1 - Basic: inject focused context
 
 `before_agent_start` is the correct point to add per-prompt instructions. It
 can add a custom message and/or replace the chained system prompt. The custom
@@ -275,3 +279,147 @@ The repository ships extension examples in the directory
 - `entry-renderer.ts`: transcript-only state
 - `dynamic-tools.ts`: runtime tool changes
 - `subagent/`: a larger composition
+
+
+## Tier 2 - Intermediate: tools and state
+
+## Tools: make the contract for the AI model explicit
+
+A custom tool needs a unique `name`, human-facing `label`, description for the
+AI model, TypeBox `parameters`, and `execute`. The return `content` goes
+to the LLM; `details` is structured metadata for renderers and state recovery.
+
+Add `promptSnippet` when the tool should have a one-line entry in Pi's default
+system prompt. Add `promptGuidelines` as instructions for the AI model while
+the tool is active. Each guideline must name its tool because Pi flattens all active tool
+guidelines into one section: write `Use hello when the user asks for a greeting,`
+not `Use this tool when the user asks for a greeting.`
+
+For robust tools:
+
+- Throw from `execute` to report an error to the model.
+- Forward `signal` into `fetch`, process helpers, and long computations.
+- Use `onUpdate` for incremental result rendering.
+- Truncate large output with the exported truncation helpers; built-in limits
+  are 50 KB or 2,000 lines.
+- For string enums exposed to Google-compatible APIs, see
+  [StringEnum vs Type.Union](#stringenum-vs-typeunion-for-string-literals).
+- Use `withFileMutationQueue(absolutePath, callback)` around the *entire*
+  read-modify-write window for a file-mutating tool. Import it from
+  `@earendil-works/pi-coding-agent`.
+
+An extension may override a built-in tool by registering the same name. That is
+an advanced compatibility commitment: preserve the built-in result `details`
+shape expected by session and UI code. If the override omits a renderer, Pi can
+reuse the built-in renderer slot, but prompt metadata is not inherited.
+
+## Understanding TypeBox schemas for tool parameters
+
+A TypeBox schema validates model-supplied arguments at runtime and generates
+the JSON Schema sent to the provider. A runtime schema is therefore required
+even when TypeScript already knows the parameter types.
+
+### Common schema patterns
+
+```ts
+import { Type } from "@earendil-works/pi-ai";
+
+// Required string parameter
+Type.String({ description: "A description helps the model use it correctly" })
+
+// Optional number
+Type.Optional(Type.Number({ description: "Count in seconds" }))
+
+// Required object with typed properties
+Type.Object({
+  path: Type.String({ description: "File path" }),
+  recursive: Type.Optional(Type.Boolean({ default: false })),
+})
+
+// String enum for Google's Gemini API and other providers requiring enum JSON Schema
+import { StringEnum } from "@earendil-works/pi-ai";
+StringEnum(["small", "medium", "large"], { description: "Size" })
+```
+
+### How to think about schemas as a JavaScript developer
+
+A TypeBox `Type.Object({...})` resembles a machine-readable JSDoc `@param`
+block. It answers three questions:
+
+1. **What shape of JSON does the model need to send?** (the schema itself)
+2. **What TypeScript type does `params` have in `execute`?** (derived from schema)
+3. **What does the model see in its tool description?** (serialized to JSON Schema)
+
+If you define a parameter as `Type.String()` and the model sends `42`, Pi
+rejects the call before your `execute` runs. This prevents malformed tool calls
+from reaching your code.
+
+### StringEnum vs Type.Union for string literals
+
+For tools exposed to Google's Gemini API, use `StringEnum` from `@earendil-works/pi-ai`
+instead of `Type.Union([Type.Literal("a"), Type.Literal("b")])`. Google's API does
+not support the `enum` constraint produced by `Type.Union` with literals, so the
+model might suggest invalid values. `StringEnum` generates the correct JSON Schema
+form that all providers understand.
+
+## Commands, UI, and rendering
+
+Commands are best for direct user actions and configuration. If multiple
+extensions register the same name, Pi keeps both and gives them numeric
+invocation suffixes in load order. Do not assume a command name is globally
+unique after loading third-party packages.
+
+`ctx.ui` supports notifications, select/confirm/input/editor dialogs, footer
+status, widgets, editor text, themes, custom autocomplete, tool expansion, and
+replacement editors. For a multi-key interaction, `ctx.ui.custom()` temporarily
+replaces the editor with a `@earendil-works/pi-tui` component.
+
+UI behavior depends on the mode. In TUI mode, `notify()` displays a
+fire-and-forget message, while dialogs wait for the user's response. In RPC
+mode, notifications emit requests that the client may display or ignore;
+dialogs emit requests and wait for matching client responses. In JSON and
+print modes, notifications are no-ops and dialogs return their cancellation
+defaults (`false` or `undefined`). Check `ctx.hasUI` before opening a dialog,
+and require `ctx.mode === "tui"` for components that need a terminal.
+
+Use a message renderer for a custom message created with `pi.sendMessage()`;
+that content participates in LLM context. Use an entry renderer for a custom
+entry created with `pi.appendEntry()`; that is durable transcript/UI state but
+does not reach the LLM. This is the key display-versus-context choice.
+
+## State, sessions, and queues
+
+Branch reconstruction and durable session entries are covered in
+[Sessions and durable context](#sec:sessions). Use this section to choose where
+extension state lives and how it schedules
+work around an active agent.
+
+In-memory variables vanish on reload, resume, fork, and restart. Reconstruct
+state in `session_start` by examining the active branch. For tool-backed state,
+store a recoverable snapshot in that tool result's `details`; it follows the
+conversation branch naturally. Use `appendEntry()` for state that should not
+enter model context.
+
+`pi.sendMessage()` injects a custom message into the session and accepts a
+`deliverAs` mode. The agent loop drains the queues at different points:
+
+| Mode | When it is applied | Effect on the active run |
+|---|---|---|
+| `steer` (default) | After the current assistant message and its tool batch finish, before the next AI-model request | Can re-enter the active multi-turn tool loop. Later steers and tool work still run before any `followUp`. |
+| `followUp` | Only when the agent is about to stop: no remaining tool calls and no pending steers | Starts another turn after that work would otherwise end. Already-queued steers, and the tools they cause, run first. |
+| `nextTurn` | With the *next* user-originated prompt | Never interrupts the active run and never starts one by itself. |
+
+While the agent is idle, `sendMessage()` with `deliverAs: "steer"` or
+`"followUp"` still only appends unless you also pass `triggerTurn: true`, which
+starts an AI-model turn immediately. `triggerTurn` is ignored for `nextTurn`.
+
+`pi.sendUserMessage()` injects a genuine user message (not a custom one) and
+always starts or continues a turn:
+
+- Idle: send immediately; `deliverAs` is not required.
+- Streaming: you must pass `deliverAs: "steer"` or `"followUp"` (same queue
+  timings as above). Omitting it throws. `nextTurn` is not available here.
+
+Do not start a second direct agent run from a hook; use these queues.
+
+For exact event shapes, use the [extension event reference](#sec:events).

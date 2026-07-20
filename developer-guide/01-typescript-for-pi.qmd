@@ -372,7 +372,7 @@ effects, or enforce application rules such as “the path exists.”
 ### A Pi tool preview
 
 This is intentionally a **preview** of extension registration. The canonical,
-runnable staged example is in [chapter 04](04-extensions.qmd#a-complete-first-extension);
+runnable staged example is in [chapter 04](24-your-first-extension.qmd#a-complete-first-extension);
 read that chapter for discovery, reload, permissions, and the complete API.
 
 ```ts

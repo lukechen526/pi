@@ -1,5 +1,7 @@
 # Terminal UI and interactive mode {#sec:tui}
 
+This is reference depth for custom UI patterns; read it when an extension needs interactive-mode or terminal rendering detail.
+
 Pi's interactive application is built from a reusable terminal UI package and
 a coding-agent-specific composition layer. Before reading this chapter, review
 [Prompt lifecycle](#sec:prompt-lifecycle) and [Agent core](#sec:agent-core).

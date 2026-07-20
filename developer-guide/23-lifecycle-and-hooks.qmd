@@ -1,6 +1,7 @@
-# Prompt lifecycle: from Enter to agent settlement {#sec:prompt-lifecycle}
+# The prompt lifecycle: where extensions hook in {#sec:prompt-lifecycle}
 
-This chapter traces the normal interactive path through the agent lifecycle.
+The lifecycle is the map of extension hook points. Chapters 7-8 assume you can
+read this path; this chapter traces the normal interactive lifecycle.
 Before reading it, finish [TypeScript used by Pi](#sec:typescript) and
 [Architecture](#sec:architecture). The later [Agent core](#sec:agent-core)
 chapter explains the reusable loop in more detail; this chapter keeps the
@@ -484,3 +485,21 @@ live trace, start at these symbols in order:
 Use the extension event timeline in `packages/coding-agent/docs/extensions.md`
 as a second view of the same lifecycle. It documents what extension authors
 can rely on; the source symbols above show which layer makes each guarantee.
+
+## Stage-to-surface bridge
+
+| Stage | Hook or API available there |
+|---|---|
+| Input | `sendUserMessage`, `deliverAs: "steer"` or `"followUp"` |
+| Interception | `registerCommand`, `input` event |
+| Turn construction | `before_agent_start`, `sendMessage`, `triggerTurn` |
+| Context boundaries | `context` event, `getSystemPromptOptions()` |
+| Provider dispatch | `before_provider_headers`, `before_provider_request`, `after_provider_response`, `registerProvider` |
+| Streaming | `message_start`/`update`/`end`, `turn_start`/`end`, custom UI |
+| Tools | `tool_call`, `tool_result`, `registerTool` |
+| Next action | steering and follow-up queues |
+| Persistence | `appendEntry`, message and entry renderers |
+| Settlement | `agent_end`, `agent_settled`, `session_shutdown`, `waitForIdle` |
+
+This table is the bridge into the extension recipes. Use the [extension event
+reference](#sec:events) for exact payloads and return values.

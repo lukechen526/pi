@@ -1,5 +1,7 @@
 # Agent core: runs, events, queues, and tool batches {#sec:agent-core}
 
+This is reference depth for extension patterns; read it when you need the generic loop, queues, or event ordering.
+
 `packages/agent` is the reusable runtime beneath the coding agent. It owns the
 model loop, message state, tool execution, streaming, queues, and cancellation.
 Read [Prompt lifecycle](#sec:prompt-lifecycle) before this chapter for the

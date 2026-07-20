@@ -1,5 +1,7 @@
 # Built-in tools: filesystem, shell, and discovery {#sec:tools}
 
+This is reference depth for extension patterns; read it when a recipe needs the built-in tool contract or mutation queue details.
+
 Pi ships seven named tools: `read`, `bash`, `edit`, `write`, `grep`, `find`,
 and `ls`. Together they cover filesystem access and mutation, shell execution,
 and bounded repository discovery. The session's **cwd** (current working

@@ -1,0 +1,138 @@
+# Packaging and sharing extensions
+
+An extension can grow from one file to a directory and then to an npm or git package. Packages are delivery mechanisms for trusted extensions, skills, prompts, and themes; review their code before installing them.
+
+## Distribute an extension as a Pi package
+
+For a reusable package, declare explicit resources in `package.json`:
+
+```json
+{
+  "name": "@acme/pi-team-tools",
+  "keywords": ["pi-package"],
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": ["./extensions"],
+    "skills": ["./skills"],
+    "prompts": ["./prompts"],
+    "themes": ["./themes"]
+  }
+}
+```
+
+Put third-party runtime packages in `dependencies`, not `devDependencies`:
+Pi package installation uses production installs by default (npm installs
+without development dependencies). Core Pi packages
+are bundled by Pi, so list each one the package actually imports as a
+`peerDependency` with the documented `"*"` range rather than bundling a
+competing copy. The broad manifest above assumes a full-featured package that
+imports all five bundled packages. Include `@earendil-works/pi-tui` only when
+code imports TUI components or TUI types for custom UI/rendering. Include
+`typebox` only when code imports schemas directly from `typebox` rather than
+using the `Type`
+re-export from `@earendil-works/pi-ai`. Package conventions also discover
+`extensions/`, `skills/`, `prompts/`, and `themes/` when a `pi` manifest is not
+present, but an explicit manifest is clearer and supports filtering.
+
+Users can install a package from npm or git with `pi install`, or list it under
+the `packages` array in settings. Project-installed packages are trust-gated
+just like project-local extensions.
+
+### Step-by-step: from zero to a shareable extension package
+
+The following example creates a minimal distributable package outside the Pi
+monorepo.
+
+**Step 1 -- Initialize a package**
+
+```bash
+mkdir pi-hello-demo
+cd pi-hello-demo
+npm init -y
+```
+
+**Step 2 -- Add the extension code**
+```bash
+mkdir extensions
+```
+
+Create `extensions/index.ts` with the hello-pi extension from the earlier
+example in this chapter.
+
+**Step 3 -- Configure `package.json`**
+
+Edit `package.json` to add:
+
+```json
+{
+  "name": "@your-name/pi-hello-demo",
+  "keywords": ["pi-package"],
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": ["./extensions"]
+  }
+}
+```
+
+The `"pi-package"` keyword makes the package discoverable. The `pi` manifest
+declares its resource directories, and `peerDependencies` identifies the Pi
+runtime packages supplied by the host. This list is intentionally shorter than
+the earlier generic manifest: the hello extension imports only
+`@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent`. Add
+`@earendil-works/pi-agent-core`, `@earendil-works/pi-tui`, or `typebox` only if
+the package imports them.
+
+**Step 4 -- Test locally**
+
+In a project directory where you use Pi, add your package path to settings:
+
+```json
+{
+  "packages": ["/absolute/path/to/pi-hello-demo"]
+}
+```
+
+Then start Pi. Your extension should load. Test with `/hello-pi` and verify
+the startup notification appears.
+
+**Step 5 -- Publish to npm**
+
+```bash
+npm publish
+```
+
+Users can then install it with:
+
+```bash
+pi install @your-name/pi-hello-demo
+```
+
+For local testing before publishing, `pi install` also accepts a git URL or
+local path.
+
+### Package layout conventions
+
+| Directory | Contents | Discovered automatically? |
+|---|---|---|
+| `extensions/` | One or more `.ts` extension factories | Yes, when no `pi` manifest |
+| `skills/` | `.md` skill files | Yes, when no `pi` manifest |
+| `prompts/` | Prompt template files | Yes, when no `pi` manifest |
+| `themes/` | JSON theme files | Yes, when no `pi` manifest |
+
+With an explicit `pi` manifest, Pi uses only the declared paths. This supports
+non-standard locations and lets a package exclude conventional directories.
+
+## Resource delivery
+
+Packages may ship skills, prompts, and themes alongside extension code. Their resource paths and package filters follow the settings scope; use explicit manifest paths when the layout is non-standard. A package is not a separate execution mode: its extension code has the same privileges as Pi.
+
+Before sharing, test the installed form, pin or review dependencies as appropriate, and document the trust boundary for project installs.

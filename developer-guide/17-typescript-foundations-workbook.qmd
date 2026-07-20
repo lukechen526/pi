@@ -67,10 +67,10 @@ you only need one chapter, the map shows which part to work first.
 
 | Workbook part | Where the skill is used |
 |---|---|
-| Part 1, everyday types | everywhere, especially [Architecture](02-architecture.qmd) |
-| Part 2, Pi patterns | [Agent core](10-agent-core.qmd) and [Extensions](04-extensions.qmd) |
-| Part 3, TypeBox | [Extensions](04-extensions.qmd), tool parameters |
-| Part 4, async and classes | [Prompt lifecycle](03-prompt-lifecycle.qmd) and [Agent core](10-agent-core.qmd) |
+| Part 1, everyday types | everywhere, especially [Architecture](22-architecture-for-extensions.qmd) |
+| Part 2, Pi patterns | [Agent core](10-agent-core.qmd) and [Extensions](24-your-first-extension.qmd) |
+| Part 3, TypeBox | [Extensions](24-your-first-extension.qmd), tool parameters |
+| Part 4, async and classes | [Prompt lifecycle](23-lifecycle-and-hooks.qmd) and [Agent core](10-agent-core.qmd) |
 | Part 5, apply the basics | [Testing and contribution](12-testing-debugging-and-contribution.qmd) |
 
 ## What TypeScript checks—and what it erases
@@ -3023,7 +3023,7 @@ For string literals inside a tool contract, prefer the helper Pi ships for
 provider compatibility: `StringEnum([...])` instead of hand-written
 `Type.Union` of literals. Chapter 4 explains the difference and the schema
 policy in
-[StringEnum vs Type.Union](04-extensions.qmd#stringenum-vs-typeunion-for-string-literals).
+[StringEnum vs Type.Union](24-your-first-extension.qmd#stringenum-vs-typeunion-for-string-literals).
 
 #### Reporting why a value failed: `Value.Errors`
 
@@ -3765,7 +3765,7 @@ without looking at an answer:
   ([Writing your first test](#writing-your-first-test)).
 
 When all of these are comfortable, continue to
-[A complete first extension](04-extensions.qmd#a-complete-first-extension).
+[A complete first extension](24-your-first-extension.qmd#a-complete-first-extension).
 
 **Moving on.** You can move on when you can open an unfamiliar Pi file and
 identify its imports, types, and runtime contracts, make a small change behind

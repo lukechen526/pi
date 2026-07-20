@@ -12,28 +12,31 @@ book:
     - part: "Start here"
       chapters:
         - 01-typescript-for-pi.qmd
-        - 02-architecture.qmd
-    - part: "Runtime"
+    - part: "Using Pi effectively"
       chapters:
-        - 03-prompt-lifecycle.qmd
-        - 10-agent-core.qmd
+        - 20-sessions-trees-compaction.qmd
+        - 21-customizing-pi.qmd
+    - part: "How Pi works"
+      chapters:
+        - 22-architecture-for-extensions.qmd
+        - 23-lifecycle-and-hooks.qmd
+    - part: "Building extensions"
+      chapters:
+        - 24-your-first-extension.qmd
+        - 25-extension-patterns.qmd
+        - 26-packaging-and-distribution.qmd
+    - part: "Subsystem deep dives"
+      chapters:
         - 08-built-in-tools.qmd
-    - part: "Build extensions"
-      chapters:
-        - 04-extensions.qmd
-        - 05-customization-and-workflow.qmd
-    - part: "Subsystems and contribution"
-      chapters:
-        - 06-sessions-and-context.qmd
-        - 07-resources-settings-and-trust.qmd
+        - 10-agent-core.qmd
         - 09-models-providers-and-auth.qmd
         - 11-tui-and-interactive-mode.qmd
-        - 12-testing-debugging-and-contribution.qmd
+        - 15-modes-sdk-and-operations.qmd
     - part: "Practice and reference"
       chapters:
+        - 12-testing-debugging-and-contribution.qmd
         - 13-guided-source-tours.qmd
         - 14-extension-event-reference.qmd
-        - 15-modes-sdk-and-operations.qmd
         - 16-failure-and-recovery-reference.qmd
         - glossary.qmd
   appendices:
