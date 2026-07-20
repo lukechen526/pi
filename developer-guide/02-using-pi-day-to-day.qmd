@@ -1,0 +1,212 @@
+# Using Pi day to day {#sec:using-pi}
+
+In plain terms: Pi is a terminal program you run inside a project directory,
+sign in to once, and talk to. It reads your code, edits files, and runs
+commands on your behalf. This chapter teaches the daily-driver surface:
+starting a session, signing in, the slash commands and keys you will actually
+press, the CLI flags worth remembering, and how to get project context into
+the conversation.
+
+It is grounded in `packages/coding-agent/README.md`,
+`packages/coding-agent/src/cli/args.ts`,
+`packages/coding-agent/src/core/slash-commands.ts`, and
+`packages/coding-agent/docs/keybindings.md`.
+
+## Prerequisites
+
+Install Pi globally from npm:
+
+```bash
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+```
+
+The `--ignore-scripts` flag disables dependency lifecycle scripts; Pi does not
+need install scripts for a normal npm install. An installer script is the
+alternative:
+
+```bash
+curl -fsSL https://pi.dev/install.sh | sh
+```
+
+Either way you get a `pi` binary on your PATH. Verify with `pi --version`.
+
+## Your first session
+
+Change into a project directory and run:
+
+```bash
+pi
+```
+
+The interactive interface (the **TUI**, terminal user interface) has four
+regions, top to bottom:
+
+- **Startup header** — loaded `AGENTS.md` files, prompt templates, skills,
+  and extensions.
+- **Messages** — your prompts, assistant responses, tool calls and results.
+- **Editor** — where you type. Its border color indicates the thinking level.
+- **Footer** — working directory, session name, token and cache usage, cost,
+  context usage, and the current model.
+
+Type a prompt in the editor and press **Enter** to submit. By default the
+model has four tools — `read`, `write`, `edit`, and `bash` — and uses them to
+fulfill your request. You watch its tool calls stream by in the message
+region.
+
+Quit with `/quit`, press **Ctrl+C** twice, or press **Ctrl+D** when the editor
+is empty.
+
+A **session** is the durable record of that conversation. Pi auto-saves
+sessions as JSONL files under `~/.pi/agent/sessions/`, organized by working
+directory — so a session belongs to the directory you started it in, and
+running `pi` in two different projects keeps two separate histories. Session
+files, branching, and what happens when a conversation gets long are covered
+in [Sessions, trees, and compaction](#sec:sessions).
+
+## Signing in and picking a model
+
+Pi needs credentials for at least one provider before the model can answer.
+There are two routes.
+
+**Subscription login.** Run `pi`, then type `/login` and pick a provider. Pi
+supports subscription logins for Anthropic Claude Pro/Max, OpenAI ChatGPT
+Plus/Pro (Codex), and GitHub Copilot. `/logout` removes credentials.
+
+**API keys.** Set the provider's environment variable before starting Pi. The
+most common examples:
+
+| Environment variable | Provider |
+|---|---|
+| `ANTHROPIC_API_KEY` | Anthropic |
+| `OPENAI_API_KEY` | OpenAI |
+| `GEMINI_API_KEY` | Google Gemini |
+| `OPENROUTER_API_KEY` | OpenRouter |
+
+Many more providers are supported (DeepSeek, Groq, Mistral, xAI, Amazon
+Bedrock, and others); the full list of environment variables is in
+`pi --help` and `packages/coding-agent/README.md`. The `--api-key <key>` flag
+overrides environment variables for one run.
+
+Once authenticated, switch models any time with `/model` (or **Ctrl+L**),
+which opens a selector over every model your credentials can reach. Cycle
+through your enabled models with **Ctrl+P**; `/scoped-models` controls which
+models participate in that cycle. Providers, model catalogs, custom providers,
+and the authentication model get a full treatment in
+[Models, providers, and authentication](#sec:models); this chapter only gets
+you talking to a model.
+
+## Slash commands you will actually use
+
+Type `/` in the editor to open the command list. The built-in commands are
+defined in `src/core/slash-commands.ts`; the ones a new user needs first:
+
+| Command | What it does |
+|---|---|
+| `/login`, `/logout` | Configure or remove provider credentials |
+| `/model` | Switch models (opens a selector) |
+| `/new` | Start a new session |
+| `/resume` | Pick a previous session to resume |
+| `/name <name>` | Set the session's display name |
+| `/session` | Show session info: file, ID, messages, tokens, cost |
+| `/compact [prompt]` | Manually compact context, optionally with custom instructions |
+| `/settings` | Thinking level, theme, message delivery, transport |
+| `/trust` | Save the project trust decision (takes effect after restart) |
+| `/reload` | Reload keybindings, extensions, skills, prompts, themes, context files |
+| `/hotkeys` | Show every keyboard shortcut |
+| `/quit` | Quit Pi |
+
+There is no built-in `/help`; `pi --help` covers the CLI and `/hotkeys`
+covers the keys. Extensions, skills, and prompt templates add their own
+commands on top of this list — see [Customizing Pi](#sec:resources).
+
+## The keys that matter
+
+The full keybinding reference lives in `docs/keybindings.md` and `/hotkeys`.
+Learn these first:
+
+| Key | Action |
+|---|---|
+| Enter | Submit the prompt; while the agent is working, queues a *steering* message delivered after the current turn |
+| Shift+Enter | Insert a newline (Ctrl+Enter on Windows Terminal) |
+| Escape | Cancel/abort the running agent; restores queued messages to the editor |
+| Escape twice | Open `/tree` session navigation |
+| Ctrl+C | Clear the editor; twice to quit |
+| Ctrl+L | Open the model selector |
+| Shift+Tab | Cycle the thinking level |
+| Ctrl+V | Paste an image or text from the clipboard (Alt+V on Windows) |
+| Ctrl+G | Open the prompt in an external editor |
+
+Two message-queue subtleties are worth knowing early. **Alt+Enter** queues a
+*follow-up* message that is delivered only after the agent finishes all its
+work, unlike Enter's steering message. **Alt+Up** pulls queued messages back
+into the editor. Steering while streaming is a first-class feature: you never
+have to wait for a run to finish before correcting course.
+
+Every keybinding is configurable in `~/.pi/agent/keybindings.json`; run
+`/reload` to apply edits without restarting. The mechanism is covered in
+[Customizing Pi](#sec:resources).
+
+## CLI flags for daily use
+
+`pi [options] [@files...] [messages...]` — flags are parsed in
+`src/cli/args.ts`. The useful daily subset:
+
+| Flag | Description |
+|---|---|
+| `-p`, `--print` | Non-interactive: process the prompt, print the response, exit |
+| `--model <pattern>` | Model pattern or ID; accepts `provider/id` and a `:<thinking>` suffix (e.g. `sonnet:high`) |
+| `--provider <name>` | Provider name when `--model` has no prefix |
+| `-c`, `--continue` | Continue the most recent session in this directory |
+| `-r`, `--resume` | Browse and select a past session |
+| `--session <path\|id>` | Use a specific session file or partial UUID |
+| `--name <name>`, `-n` | Set the session display name at startup |
+| `--no-session` | Ephemeral mode; nothing is saved |
+| `--list-models [search]` | List available models, optionally filtered |
+| `-e`, `--extension <path>` | Load an extension (repeatable) |
+| `--tools <list>`, `-t` | Allowlist tools, e.g. `--tools read,grep,find,ls` for read-only runs |
+| `-h`, `--help` | Full CLI help, including every provider environment variable |
+| `-v`, `--version` | Print the version |
+
+Passing messages as arguments works in both modes: `pi "List all .ts files"`
+opens the TUI with that first prompt already submitted, while
+`pi -p "Summarize this codebase"` runs headless and exits. Print mode also
+reads piped stdin and merges it into the prompt:
+
+```bash
+cat README.md | pi -p "Summarize this text"
+```
+
+Session-selection flags (`-c`, `-r`, `--session`) map directly onto the
+session machinery in [Sessions, trees, and compaction](#sec:sessions).
+
+## Getting context into Pi
+
+Pi is only as useful as the context you hand it. Three everyday mechanisms:
+
+**@-file mentions.** Type `@` in the editor to fuzzy-search project files and
+attach one to your message. The same syntax works on the command line:
+`pi @code.ts @test.ts "Review these files"`. You can also paste text or
+images directly into the editor with Ctrl+V, or drag images onto the
+terminal.
+
+**`!` for shell output.** Prefix a line with `!command` to run a command and
+send its output to the model with your message; `!!command` runs it without
+sending the output.
+
+**Context files.** Pi loads `AGENTS.md` (or `CLAUDE.md`) at startup from
+`~/.pi/agent/`, from every ancestor directory down to your cwd, and from the
+cwd itself. Use these for project conventions, build commands, and rules the
+model should always follow. The exact discovery order and precedence rules
+are in [Customizing Pi](#sec:resources).
+
+## Where to go next
+
+- [Sessions, trees, and compaction](#sec:sessions) — how sessions persist,
+  branch with `/tree` and `/fork`, and compact when context fills.
+- [Customizing Pi](#sec:resources) — settings, keybindings, skills, prompt
+  templates, themes, and trust.
+- [Models, providers, and authentication](#sec:models) — the full provider
+  and auth picture behind `/login` and `/model`.
+- [Architecture: packages, ownership, and entry points](#sec:architecture) —
+  how the TUI, coding-agent, and agent-core packages fit together, for when
+  you start extending Pi.

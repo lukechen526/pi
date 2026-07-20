@@ -14,6 +14,7 @@ book:
         - 01-typescript-for-pi.qmd
     - part: "Using Pi effectively"
       chapters:
+        - 02-using-pi-day-to-day.qmd
         - 20-sessions-trees-compaction.qmd
         - 21-customizing-pi.qmd
     - part: "How Pi works"
@@ -28,8 +29,8 @@ book:
     - part: "Subsystem deep dives"
       chapters:
         - 08-built-in-tools.qmd
-        - 10-agent-core.qmd
         - 09-models-providers-and-auth.qmd
+        - 10-agent-core.qmd
         - 11-tui-and-interactive-mode.qmd
         - 15-modes-sdk-and-operations.qmd
     - part: "Practice and reference"

@@ -332,12 +332,9 @@ pi.on("tool_call", (event) => {
 
 For a custom tool, derive the TypeBox input type with `Static`. TypeBox is a
 runtime validation library covered in [TypeScript basics](#sec:typescript).
-The canonical extension documentation imports `Type` and `Static` from the
-direct `typebox` package because an extension declares that schema dependency.
-Code that already depends on `@earendil-works/pi-ai` may instead use its public
-root re-exports of `Type` and `Static`. Both paths are valid, but
-`@earendil-works/pi-coding-agent` does not re-export TypeBox. Supply explicit
-generic parameters to the guard:
+This example imports `Type` and `Static` from the direct `typebox` package;
+[Run modes](#sec:modes) covers the alternative `pi-ai` re-export path. Supply
+explicit generic parameters to the guard:
 
 ```ts
 import { Type, type Static } from "typebox";

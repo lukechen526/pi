@@ -65,9 +65,9 @@ the **scripts** — named commands such as `check` that you run as
 The repository convention is `npm install --ignore-scripts`, which skips
 package lifecycle scripts for supply-chain safety; the dependencies work
 without them. `npm run check` is the repository quality gate: it type-checks,
-lints, and runs related static checks, but not the test suite. Chapter 12
-covers the full contribution workflow; here you only need the three verbs
-below.
+lints, and runs related static checks, but not the test suite. [Testing,
+debugging, and contribution](#sec:testing) covers the full contribution
+workflow; here you only need the three verbs below.
 
 ### Install, run, and check are different actions
 
@@ -372,7 +372,7 @@ effects, or enforce application rules such as “the path exists.”
 ### A Pi tool preview
 
 This is intentionally a **preview** of extension registration. The canonical,
-runnable staged example is in [chapter 04](24-your-first-extension.qmd#a-complete-first-extension);
+runnable staged example is in [Your first extension](24-your-first-extension.qmd#a-complete-first-extension);
 read that chapter for discovery, reload, permissions, and the complete API.
 
 ```ts
