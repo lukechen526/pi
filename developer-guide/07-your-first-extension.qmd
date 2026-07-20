@@ -1,12 +1,20 @@
 # Your first extension {#sec:extensions}
 
-An extension is a TypeScript or JavaScript module that Pi loads at runtime with
-`jiti`. Jiti resolves the module and transpiles TypeScript syntax on demand, so
-an extension does not need a separate build step; it does not bundle or
-type-check the code. The module's default export is a **factory**: a function
-that receives `ExtensionAPI` and registers the extension's behavior. The factory
-registers hooks, tools, commands, shortcuts, flags,
-renderers, and providers, which Pi invokes at defined points in its runtime.
+In plain terms: an extension is a file of TypeScript or JavaScript that Pi
+loads at startup and that adds behavior to every session. With a few dozen
+lines you can, for example, add a `/standup` command that summarizes today's
+session, give the AI model a new tool it can call, log every `bash` command
+the agent runs, or redact secrets before context reaches the model. This
+chapter builds one small extension step by step and shows how to debug it.
+
+Under the hood, Pi loads an extension with `jiti`, a runtime TypeScript
+loader library. Jiti resolves the module and transpiles TypeScript syntax on
+demand, so an extension does not need a separate build step; it does not
+bundle or type-check the code. The module's default export is a
+[**factory**](#sec:glossary): a function that receives `ExtensionAPI` and
+registers the extension's behavior. The factory registers
+[hooks](#sec:glossary), tools, commands, shortcuts, flags, renderers, and
+providers, which Pi invokes at defined points in its runtime.
 
 Extensions execute with the permissions of the Pi process. They are trusted
 code, not a sandbox. Review a package before installing it and treat an
@@ -15,9 +23,24 @@ normal local program.
 
 A **lifecycle** is the ordered sequence of events Pi emits while it loads an
 extension, runs a session, processes turns, and shuts the session down. An
-event is a named occurrence in that sequence; a hook is the extension handler
-registered to observe or affect that occurrence. The examples below use the
-public `ExtensionAPI` contract rather than internal implementation details.
+event is a named occurrence in that sequence; a **hook** is the extension
+handler registered to observe or affect that occurrence. The examples below
+use the public `ExtensionAPI` contract rather than internal implementation
+details.
+
+## Prerequisites
+
+Finish [Customizing Pi](#sec:resources) first — this chapter assumes you know
+how settings, trust, and scopes interact, and it links back to that chapter's
+mechanism-choosing guidance. You also need:
+
+- A working `pi` install, signed in to a provider (required to exercise the
+  example tool; see [Using Pi day to day](#sec:using-pi)).
+- Basic TypeScript familiarity: functions, `async`/`await`, and imports are
+  enough (see [Reading and changing Pi's TypeScript](#sec:typescript)).
+- Optionally, a checkout of the `pi-mono` repository so you can follow the
+  referenced source files; every file path in this chapter is relative to its
+  root.
 
 ## What an extension is
 
@@ -27,10 +50,19 @@ is a model-callable function with a validated input shape. A **context** is the
 object passed to a handler, including the session, cancellation signal, and
 possible UI.
 
+Most extensions register at least one of three things; choosing among them is
+the first design decision:
+
+| Register a... | When you want... | Invoked by |
+|---|---|---|
+| Command (`pi.registerCommand`) | An action the user triggers explicitly, such as `/standup` | The user typing `/name` |
+| Tool (`pi.registerTool`) | A capability the AI model can call during a turn, with validated arguments | The model, via a tool call |
+| Hook (`pi.on`) | To observe or gate something Pi already does: block a tool call, prune context, persist state at shutdown | Pi, at the matching lifecycle event |
+
 Begin with a progressive one-file example rather than copying the full package
 example. First register one command that displays a notice. Then add a tool,
 then a `session_start` hook, and finally durable state. The complete example
-below shows all patterns together; read it once for each stage instead of
+below shows all four stages together; read it once for each stage instead of
 copying every feature at once.
 
 ## Choose the right customization mechanism
@@ -52,19 +84,29 @@ also add local paths in `settings.json`, or try a path for one invocation with
 `pi -e ./path/to/extension.ts`. The latter is ideal for a quick test, but
 `/reload` hot reload is intended for auto-discovered locations.
 
+When the same extension is reachable from more than one scope, Pi loads the
+project copy first, then the global one
+(`packages/coding-agent/src/core/extensions/loader.ts`); a file already seen
+at the same resolved path is skipped. If two extensions register a tool,
+command, or flag with the same name, both stay loaded, the conflict is
+reported as a diagnostic, and load order decides precedence.
+
 At startup, the resource loader loads extension factories before session start.
 An async factory is awaited before startup continues. That makes it suitable
 for one-time initialization such as discovering available AI models and calling
 `pi.registerProvider()`. Do not start timers, watchers, processes, or sockets
-in the factory. For example, this command loads extension factories to discover
+in the factory. The reason: the factory also runs for commands that never
+start a session, so anything long-lived it starts would leak into one-shot
+invocations. For example, this command loads extension factories to discover
 available AI models from providers but does not start a session:
 
 ```bash
 pi --list-models
 ```
 
-Start long-lived session resources in `session_start` and close them in a way
-that is safe to call more than once (idempotently) in `session_shutdown`.
+Start long-lived session resources in `session_start` instead, and close them
+in a way that is safe to call more than once (idempotently) in
+`session_shutdown`.
 
 ## The lifecycle you can rely on
 
@@ -78,14 +120,12 @@ event is shown.
 ```{mermaid}
 %%| label: fig-extension-lifecycle
 %%| fig-cap: "Representative extension event flow (not exhaustive)."
+%%{init: {"flowchart": {"nodeSpacing": 16, "rankSpacing": 12}, "themeVariables": {"fontSize": "12px"}}}%%
 flowchart TD
-  factory[Factory runs] --> trust[project_trust]
-  trust --> start[session_start]
-  start --> resources[resources_discover]
-  resources --> input[Prompt and input]
-  input --> agent[before_agent_start]
-  agent --> turn[Turns, streaming, tools]
-  turn --> settled[agent_end and agent_settled]
+  factory[Factory] --> trust[project_trust] --> start[session_start]
+  start --> resources["Resources, prompt,<br/>and input"]
+  resources --> turn["Turns, streaming,<br/>and tools"]
+  turn --> settled["agent_end /<br/>agent_settled"]
   settled --> shutdown[session_shutdown]
 ```
 
@@ -115,8 +155,51 @@ context and streaming; **Provider** is the serialized request boundary;
 | AI model | `model_select`, `thinking_level_select` | Update UI/state for the selected AI model |
 | User shell | `user_bash` | Route `!` and `!!` through a different execution backend |
 
+The flowchart compresses "Turns, streaming, tools" into one node. The sequence
+diagram below zooms into a single turn so you can see where the most-used
+hooks fire:
+
+```{mermaid}
+%%| label: fig-one-turn-hooks
+%%| fig-cap: "Where extension events fire inside one turn; parallel tool calls are shown as one lane."
+%%| fig-width: 6.2
+%%{init: {"sequence": {"width": 78, "height": 34, "actorMargin": 8, "boxMargin": 4, "boxTextMargin": 2, "messageMargin": 8, "fontSize": 12}}}%%
+sequenceDiagram
+  participant U as You
+  participant S as Session
+  participant X as Extensions
+  participant P as API
+  U->>S: prompt
+  S->>X: before start
+  S->>X: context
+  S->>P: request hook + request
+  P-->>S: reply + tool calls
+  S->>X: tool gate
+  S->>S: execute tool
+  S->>X: result, end, turn end
+```
+
 `tool_call` is a policy enforcement point: it runs after schema validation and
-can block a tool.
+can block a tool. Five lines are enough to refuse a destructive `bash` command
+(the `isToolCallEventType()` helper narrows `event` to a typed built-in tool
+call; see `packages/coding-agent/src/core/extensions/types.ts`):
+
+```ts
+import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
+
+pi.on("tool_call", async (event) => {
+  if (isToolCallEventType("bash", event) && event.input.command.includes("rm -rf")) {
+    return { block: true, reason: "Refusing destructive command" };
+  }
+});
+```
+
+Returning `{ block: true }` skips execution, and the `reason` reaches the
+model as an error tool result. A handler that returns nothing lets the call
+proceed.
+
+*The next three paragraphs are the subtlest part of this chapter; you can skim
+them on a first pass and come back when you need these hooks.*
 
 Its input is mutable. A change affects execution and is visible to later
 `tool_call` handlers. **Pi does not revalidate input after a handler mutates
@@ -125,24 +208,27 @@ violate.
 
 `context` receives a deep copy of messages that an extension may replace. It
 is a safer place to prune/inject LLM context than modifying session storage.
-`before_provider_request` is lower-level still: it sees the provider-specific
-payload after serialization, so changes there are not reflected by
-`ctx.getSystemPrompt()`.
+`before_provider_request` is lower-level still: by then Pi has converted its
+generic context into one provider's wire format — the literal JSON payload of
+the Anthropic or OpenAI HTTP request — so changes there affect only what goes
+on the wire and are not reflected by `ctx.getSystemPrompt()`, which returns
+Pi's assembled prompt text, not the serialized payload.
 
 ## Runnable: canonical staged first extension {#a-complete-first-extension}
 
 This is the chapter's single canonical extension example. It is intentionally
-small enough to run first as a command, then as a tool, and finally as a
-lifecycle hook; the listing shows the three stages together so later sections
-can refer back to one source. It adds a `hello` tool callable by an AI model, a
-`/hello-pi` command, and a startup notification.
+small enough to run first as a command, then as a tool, then as a lifecycle
+hook, and finally with durable state; the listing shows the four stages
+together so later sections can refer back to one source. It adds a `hello`
+tool callable by an AI model, a `/hello-pi` command, a startup notification,
+and a greeting counter that survives `/reload` and restart.
 
 > **Runnable**
 >
 > - **Filename/location:** `~/.pi/agent/extensions/hello-pi.ts`
 > - **Command:** start `pi` in any project, then run `/hello-pi Ada`
-> - **Expected result:** startup shows `hello-pi extension is ready`; the command shows `Hello, Ada!`. The model can also call the `hello` tool.
-> - **Reload:** edit the file and run `/reload`; the new `session_start` notification confirms the reloaded factory.
+> - **Expected result:** startup shows `hello-pi extension is ready`; the command shows `Hello, Ada! (greeting #1)`. The model can also call the `hello` tool.
+> - **Reload:** edit the file and run `/reload`; the new `session_start` notification confirms the reloaded factory, and the counter picks up where it left off.
 > - **Cleanup:** remove `~/.pi/agent/extensions/hello-pi.ts` when finished, then run `/reload` or restart Pi.
 > - **Permissions caution:** this file is trusted code with the same filesystem, process, network, and credential permissions as Pi. Do not run an extension you have not reviewed.
 
@@ -173,17 +259,27 @@ const helloTool = defineTool({
   },
 });
 
+let greetingCount = 0;
+
 export default function register(pi: ExtensionAPI) {
   pi.registerTool(helloTool);
 
   pi.registerCommand("hello-pi", {
     description: "Show a greeting notification",
     handler: async (args, ctx) => {
-      ctx.ui.notify(`Hello, ${args || "world"}!`, "info");
+      greetingCount += 1;
+      pi.appendEntry("hello-pi-count", { count: greetingCount });
+      ctx.ui.notify(`Hello, ${args || "world"}! (greeting #${greetingCount})`, "info");
     },
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    // Rebuild in-memory state from durable session entries (stage 4).
+    for (const entry of ctx.sessionManager.getEntries()) {
+      if (entry.type === "custom" && entry.customType === "hello-pi-count") {
+        greetingCount = (entry.data as { count: number }).count;
+      }
+    }
     ctx.ui.notify("hello-pi extension is ready", "info");
   });
 }
@@ -192,23 +288,39 @@ export default function register(pi: ExtensionAPI) {
 The tool definition uses `defineTool`, as does the repository's verified
 extension example:
 `packages/coding-agent/examples/extensions/hello.ts`.
-`Type.Object` is a runtime schema. `defineTool` derives the static type of
+`Type` is the TypeBox schema builder re-exported from `@earendil-works/pi-ai`
+(see [TypeBox](#sec:glossary)), and `Type.Object` builds a runtime schema.
+`defineTool` derives the static type of
 `params`, and the agent loop validates AI-model-supplied arguments against that
 schema before calling `execute`.
 
+The counter demonstrates stage 4. `pi.appendEntry(customType, data)` persists a
+small JSON record into the session file as a custom entry; custom entries are
+durable but never sent to the model. Because `/reload`, `/resume`, and
+restarting Pi all discard module-level variables, the `session_start` handler
+rebuilds `greetingCount` by scanning the session entries — the durable copy —
+for the last `hello-pi-count` record. See `pi.appendEntry()` in
+`packages/coding-agent/docs/extensions.md`.
+
 3. Start Pi in any project. The startup notification confirms discovery.
-   Run `/hello-pi Ada` to exercise the command. Ask Pi to greet Ada with the
-   `hello` tool, or inspect its active tool list, to exercise the interface
-   exposed to the AI model.
+   Run `/hello-pi Ada` to exercise the command. Then type the literal prompt
+   `Use the hello tool to greet Ada` to exercise the interface exposed to the
+   AI model. If the model does not pick the tool, run the built-in `/debug`
+   command (see [Debugging extensions](#debugging-extensions) below) and check
+   that `hello` appears in the tool definitions sent to the model.
 
 4. Test as a user: edit the discovered file and run `/reload` in Pi. That path
    emits `session_shutdown`, reloads resources, then emits `session_start` with
-   `reason: "reload"`.
+   `reason: "reload"`. Run `/hello-pi Ada` again: the counter continues from
+   the durable entry instead of resetting to zero.
 
    Separate rule for extension authors: if a *command handler* itself calls
    `ctx.reload()`, end the handler there. Reloading tears down the current
-   runtime and spins up a new one, but the old `await` resumes in the pre-reload
-   call frame with the old `ctx` and closed-over state:
+   runtime and spins up a new one. In plain terms: any code after
+   `await ctx.reload()` still runs, but it runs inside the dead copy of your
+   extension, with the old `ctx` and any closed-over state (variables from the
+   surrounding function scope that the handler captured). That code cannot
+   affect the freshly loaded extension:
 
    ```ts
    // Author responsibility: do not resume work on the pre-reload instance.
@@ -234,7 +346,7 @@ The global file is preferable when testing `/reload`.
 | `pi.registerShortcut()` / `pi.registerFlag()` | Add a keybinding action or CLI option |
 | `pi.sendMessage()` / `pi.sendUserMessage()` | Put a custom or user message into agent flow |
 | `pi.appendEntry()` | Persist extension-only session data outside LLM context |
-| `pi.registerMessageRenderer()` / `pi.registerEntryRenderer()` | Render custom message/entry types in the transcript |
+| `pi.registerMessageRenderer()` / `pi.registerEntryRenderer()` | Render custom message/entry types in the transcript (see [Renderer](#sec:glossary)) |
 | `pi.getActiveTools()` / `pi.setActiveTools()` | Inspect or change the currently exposed tool set |
 | `pi.setModel()` / `pi.setThinkingLevel()` | Change live session AI-model settings |
 | `pi.registerProvider()` / `pi.unregisterProvider()` | Register an endpoint/provider for AI models at runtime |
@@ -248,7 +360,18 @@ and `ctx.ui`. Pass `ctx.signal` to cancelable nested work. Check
 `ExtensionCommandContext` adds session-changing methods such as `newSession`,
 `fork`, `navigateTree`, `switchSession`, `waitForIdle`, and `reload`. They are
 available only in command handlers because changing a session from an ordinary
-event handler can deadlock or leave stale state.
+event handler can deadlock or leave stale state. A command that changes the
+session typically looks like this:
+
+```ts
+pi.registerCommand("wrap-up", {
+  description: "Wait for the agent to go idle, then start a fresh session",
+  handler: async (_args, ctx) => {
+    await ctx.waitForIdle();
+    await ctx.newSession();
+  },
+});
+```
 
 ## Debugging extensions
 
@@ -264,7 +387,12 @@ Work from loading toward the failing behavior:
    for `.pi/extensions/`. A named export alone is not loaded.
 2. **Check the code independently.** Run
    `npx tsc --noEmit path/to/extension.ts`. Jiti transpiles TypeScript but does
-   not type-check it, so type errors can survive loading and fail later.
+   not type-check it, so type errors can survive loading and fail later. Note
+   that this only works where the imports resolve: run it inside a `pi-mono`
+   checkout or a project that has `@earendil-works/pi-coding-agent` installed.
+   On a bare file under `~/.pi/agent/extensions/` there is no `node_modules`
+   to resolve against, and `tsc` reports module-resolution errors that say
+   nothing about your code.
 3. **Isolate one boundary.** Exercise one command or one simple tool call. Add
    temporary notifications to the relevant hooks in TUI mode, or concise
    logging when testing print mode. Check command names, tool names, schemas,
@@ -281,23 +409,45 @@ Work from loading toward the failing behavior:
 
 ### Common pitfalls
 
+*This table and the fail-safe note below it are reference material; you can
+skim them on a first pass and return when something misbehaves.*
+
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Extension never loads | Wrong path, missing default export, or untrusted project | Check discovery conventions, export the factory as default, and establish project trust |
-| `tool_call` handler does not match | Tool name or type-narrowing check is wrong | Check `event.toolName` and `isToolCallEventType()` |
-| State disappears after `/reload` | State exists only in closed-over variables | Rebuild it from session entries in `session_start` |
-| RPC dialog waits indefinitely | The client does not answer `extension_ui_request` | Send the matching response or set a dialog timeout |
+| `tool_call` handler does not match | Tool name or type-narrowing check is wrong | Check `event.toolName` and use `isToolCallEventType()` (`packages/coding-agent/src/core/extensions/types.ts`) |
+| State disappears after `/reload` | State exists only in closed-over variables | Rebuild it from session entries in `session_start`, as the canonical example does |
+| RPC dialog waits indefinitely | In [RPC mode](#sec:glossary) — no terminal; a client process drives Pi over JSON messages — a `ctx.ui` dialog arrives as an `extension_ui_request` message the client does not answer | Send the matching response or set a dialog timeout |
 | A dialog silently denies in print/JSON mode | `ctx.hasUI` was not checked | Define a noninteractive policy before calling the dialog |
 | Extension works once but fails after reload | Stale references or leaked resources | Clean up safely in `session_shutdown`; do not reuse the old context after `reload()` |
-| Model never calls the tool | Weak description or missing prompt guidance | Tighten `description` and add tool-named `promptGuidelines` |
-| Parallel tools overwrite a file | The mutation bypasses Pi's per-file queue | Wrap the entire read-modify-write operation in `withFileMutationQueue` |
+| Model never calls the tool | Weak description or missing prompt guidance | Tighten `description` and add `promptGuidelines` bullets that name the tool (`packages/coding-agent/docs/extensions.md`) |
+| Parallel tools overwrite a file | The mutation bypasses Pi's per-file queue | Wrap the entire read-modify-write operation in `withFileMutationQueue` (`packages/coding-agent/docs/extensions.md`) |
 
 Pi logs ordinary handler errors and continues. `tool_call` is fail-safe: if one
 of its handlers throws, Pi stops running later `tool_call` handlers for that
-call, does not execute the tool, and does not run `tool_result` handlers for it.
-Instead, the thrown error message becomes an `isError: true` tool-result message
-stored in the session and sent to the model; the agent loop and sibling tool
-calls can continue. Test policy hooks on both allow and deny paths.
+call, does not execute the tool, and does not run `tool_result` handlers for
+it. Instead, in order:
+
+1. The thrown error message becomes an `isError: true` tool-result message.
+2. That message is stored in the session and sent to the model.
+3. The agent loop and sibling tool calls continue normally.
+
+Test policy hooks on both allow and deny paths.
+
+## Try it
+
+1. Add argument completion to `/hello-pi` with `getArgumentCompletions`
+   (`packages/coding-agent/src/core/extensions/types.ts`), suggesting a few
+   names, and confirm the completions appear when you type `/hello-pi ` in the
+   editor.
+2. Copy the `tool_call` block example from this chapter into a new extension,
+   ask Pi to remove a scratch directory with `rm -rf`, and confirm both paths:
+   the command never runs, and the model receives your `reason` as an error it
+   can respond to. Then approve a harmless `ls` to confirm allowed calls still
+   proceed.
+3. Extend the counter to be per person (a map from name to count, persisted in
+   one entry), then `/reload` and `/resume` and verify the per-person counts
+   survive both.
 
 ## Before deployment
 

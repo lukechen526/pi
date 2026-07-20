@@ -5,6 +5,22 @@ that package owns, what the lower layers provide, and why an extension can use
 public APIs instead of forking Pi. If needed, start with [the TypeScript
 route](#sec:typescript); terminology is available in the [glossary](#sec:glossary).
 
+## Prerequisites
+
+Read [Using Pi day to day](#sec:using-pi) and [Customizing Pi](#sec:resources)
+first: you should have run `pi`, used a slash command, and know what a
+setting, skill, prompt template, and theme are.
+
+This chapter constantly references files in Pi's source tree, so clone the
+monorepo (a single repository containing several separately published
+packages) and open it in an editor to follow along:
+
+```bash
+git clone https://github.com/earendil-works/pi-mono.git
+```
+
+Every path in this chapter is relative to that repository root.
+
 A useful rule is: move a feature down only when it is genuinely useful outside
 the coding agent. The coding-agent package owns command-line behavior, local
 filesystem tools, project resources, session UX, and the extension API; the
@@ -12,10 +28,20 @@ filesystem tools, project resources, session UX, and the extension API; the
 
 ## Pi's minimal defaults {#sec:minimal-defaults}
 
-Pi is deliberately a minimal coding harness: the design goal is the smallest
-core that still makes a viable agent, with everything else arriving through
-extensions, skills, prompts, and themes. Understanding that baseline explains
-both the package map and why the extension API is so prominent.
+Pi is deliberately a minimal coding harness (the small fixed core the model
+runs inside, with everything else bolted on from outside): the design goal is
+the smallest core that still makes a viable agent, with everything else
+arriving through extensions, skills, prompts, and themes (see [Customizing
+Pi](#sec:resources) for those four resource kinds). Understanding that
+baseline explains both the package map and why the extension API is so
+prominent.
+
+::: {.callout-note}
+## Skippable on first read
+This section explains Pi's design philosophy and system-prompt internals. If
+you would rather see the package map first, jump ahead to [How to read this
+chapter](#sec:how-to-read) and come back later.
+:::
 
 **The default tool set is four tools.** A fresh session activates only
 `read`, `bash`, `edit`, and `write`
@@ -23,8 +49,8 @@ both the package map and why the extension API is so prominent.
 `grep`, `find`, and `ls` — ship but stay inactive until selected with
 `--tools`, an extension's `pi.setActiveTools()`, or a setting. The reasoning:
 a model with `bash` can already run `rg`, `find`, and `ls` itself, so Pi does
-not spend prompt space on dedicated tools for what the shell does. [Built-in
-tools](#sec:tools) covers the full registry and selection mechanics.
+not spend context-window budget on dedicated tools for what the shell does.
+[Built-in tools](#sec:tools) covers the full registry and selection mechanics.
 
 **The base system prompt is about 15 lines.** `buildSystemPrompt()` in
 `core/system-prompt.ts` assembles a fixed base, then appends per-session
@@ -65,10 +91,11 @@ operating inside pi, a coding agent harness") and three short sections:
   asks about Pi itself.
 
 There is no date line and no other behavioral boilerplate. The appended parts
-are `--append-system-prompt` text, `AGENTS.md` context files in a
-`<project_context>` wrapper, skills, and a final cwd line; [Customizing
-Pi](#sec:resources) covers those inputs. A `--system-prompt` replacement swaps
-the base out entirely while keeping the appended parts.
+are `--append-system-prompt` text, `AGENTS.md` context files wrapped in a
+`<project_context>` tag (an XML-like marker that keeps file contents visibly
+separate from Pi's own instructions), skills, and a final cwd line;
+[Customizing Pi](#sec:resources) covers those inputs. A `--system-prompt`
+replacement swaps the base out entirely while keeping the appended parts.
 
 **What Pi deliberately does not build in** (see the philosophy section of
 `packages/coding-agent/README.md`):
@@ -86,7 +113,7 @@ Each is a considered "no" — the core stays small, and the extension surface
 carries the rest. The example extensions are the pattern in action: reference
 implementations you can adopt, not built-in behavior you must disable.
 
-## What you will learn first
+## How to read this chapter {#sec:how-to-read}
 
 Start with the package map, then follow the startup diagram, and only then read
 the package walkthrough. A **package** is a deployable unit with its own public
@@ -126,8 +153,16 @@ monorepo (a single repository containing several separately published
 packages), allowing it to be reused by other terminal applications.
 
 For a beginner-readable boundary example, follow a `/hello-pi` slash command
-from keystroke to provider request. The command is hypothetical, but every
-step names the real file that handles it:
+from keystroke to provider request. The command is hypothetical — Pi does not
+ship a `hello-pi` command — but every step names the real file that handles
+it. The closest shipped example is
+`packages/coding-agent/examples/extensions/commands.ts`, which registers a
+`/commands` command; run any example extension from the repository root with
+the repeatable `-e` flag, for example:
+
+```bash
+pi -e packages/coding-agent/examples/extensions/commands.ts
+```
 
 1. **Input.** You type `/hello-pi world` in the interactive mode
    (`modes/interactive/interactive-mode.ts` in coding-agent), which
@@ -156,16 +191,22 @@ step names the real file that handles it:
 
 ```{mermaid}
 %%| label: fig-hello-pi-trace
-%%| fig-cap: "The /hello-pi trace. Each arrow crosses a package boundary; only the last one leaves the process."
-flowchart TD
-  IM["interactive mode (coding-agent)<br/>user types /hello-pi"]
-  CMD["extension command handler (extension)"]
-  SES["AgentSession.prompt() (coding-agent)"]
-  LOOP["agent loop (agent)"]
-  SS["streamSimple() to provider module (ai)"]
-  HTTP["provider HTTPS API"]:::prov
-  IM --> CMD --> SES --> LOOP --> SS --> HTTP
-  classDef prov fill:#dbe7f5,stroke:#2f5b8f,color:#000000
+%%| fig-cap: "The /hello-pi trace as a message sequence, one lifeline per package. Messages 1–3 show the subtle part: the command handler re-enters AgentSession.prompt(), which is how a slash command starts a model turn. Only the last hop leaves the process."
+%%| fig-width: 6.4
+%%{init: {"sequence": {"width": 76, "height": 34, "actorMargin": 8, "boxMargin": 4, "boxTextMargin": 2, "messageMargin": 8, "fontSize": 12}}}%%
+sequenceDiagram
+  participant I as Interactive
+  participant S as Session
+  participant C as Command
+  participant L as Agent loop
+  participant P as Provider
+  Note over I: /hello-pi world
+  I->>S: prompt
+  S->>C: handler
+  C->>S: send message
+  S->>L: start turn
+  L->>P: request
+  P-->>L: response events
 ```
 
 The same six steps apply to any extension command that triggers a model turn;
@@ -183,7 +224,29 @@ package names map back to source during development. An extension should import
 published package names for public types and APIs; use relative imports only
 inside the same package. This preserves the boundary installed users see.
 
+Concretely, an extension imports from the package root:
+
+```ts
+// Correct: the published package name, resolved to its public exports.
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+// Wrong: a relative path into another package's internals. It breaks the
+// moment that file moves, and it compiles only inside the monorepo.
+import type { ExtensionAPI } from "../../coding-agent/src/core/extensions/types.ts";
+```
+
 ## Component walkthrough
+
+Five packages, five reasons to edit. The table is the one-paragraph version;
+the subsections below add detail per package.
+
+| Package | You work here when | Key entry file |
+|---|---|---|
+| `packages/tui` | A terminal primitive any TUI could reuse | `packages/tui/src/tui.ts` |
+| `packages/ai` | Provider protocol JSON or streaming | `packages/ai/src/index.ts` |
+| `packages/agent` | A loop rule for every consumer | `packages/agent/src/agent-loop.ts` |
+| `packages/coding-agent` | Pi application behavior | `packages/coding-agent/src/main.ts` |
+| `packages/orchestrator` | Multi-process orchestration (experimental) | — |
 
 ### `packages/tui`: terminal rendering primitives
 
@@ -192,15 +255,16 @@ layout, focus, key parsing, editor components — that any terminal app could
 reuse. For a Pi-specific chat row, command, or tool renderer, start in
 coding-agent instead.
 
-`packages/tui/src/index.ts` is the public barrel (a file that re-exports
-symbols from other modules). It exports the `TUI` class,
+`packages/tui/src/index.ts` is the public [barrel](#sec:glossary) (a file
+that re-exports symbols from other modules). It exports the `TUI` class,
 the `Component` interface, containers, text/editor/list components, terminal
 abstractions, key parsing, keybindings, autocomplete, and ANSI-aware (terminal
 escape-code-aware) text utilities.
 
 `packages/tui/src/tui.ts` owns the component tree, focus, layout, overlays,
-input routing, and differential rendering. `src/terminal.ts` provides the
-process-terminal boundary. The components under `src/components/` render
+input routing, and differential rendering (repainting only the terminal cells
+that changed since the last frame, instead of redrawing the whole screen).
+`src/terminal.ts` provides the process-terminal boundary. The components under `src/components/` render
 specific UI pieces; `src/keybindings.ts`, `src/keys.ts`, and the editor
 components handle keyboard semantics. This package does not know what a model,
 tool call, session, or extension is.
@@ -212,10 +276,12 @@ or a provider quirk. UI decisions and built-in filesystem tools do not belong
 in this package.
 
 The small public entry point `packages/ai/src/index.ts` exports core types,
-models, authentication utilities, event-stream helpers, TypeBox, and selected
-API option types. It intentionally avoids eagerly importing provider catalogs
-and provider factories. Provider-specific modules live under `src/providers/`
-and streaming implementations under `src/api/`.
+models, authentication utilities, event-stream helpers, TypeBox (the runtime
+schema library Pi uses for tool parameter validation; see [TypeScript
+basics](#sec:typescript)), and selected API option types. It intentionally
+avoids eagerly importing provider catalogs and provider factories.
+Provider-specific modules live under `src/providers/` and streaming
+implementations under `src/api/`.
 
 The core concepts are defined in `src/types.ts`:
 
@@ -225,10 +291,27 @@ The core concepts are defined in `src/types.ts`:
 - An `AssistantMessageEventStream` yields provider-independent start, text,
   thinking, tool-call, completion, and error events.
 
-`src/compat.ts` supplies the compatibility `streamSimple()` dispatch used on
-the coding-agent path. It chooses a built-in model registry or resolves an API
-provider from `model.api`, then passes a `Context` plus simple stream options
-to that provider. `src/models.ts` exposes a `Models` implementation that owns
+A `Context` is exactly three fields (`src/types.ts`):
+
+```ts
+interface Context {
+  systemPrompt?: string;  // the assembled system prompt
+  messages: Message[];    // normalized user/assistant/toolResult messages
+  tools?: Tool[];         // tool definitions with TypeBox parameter schemas
+}
+```
+
+In plain terms, an `AssistantMessageEventStream` is one async stream of
+events — `start`, `text_delta` chunks, `thinking_delta` chunks,
+`toolcall_end`, then `done` or `error` — with the same shape no matter which
+provider produced the response. Callers never parse provider JSON; the
+provider module under `src/api/` already translated it.
+
+`src/compat.ts` supplies the [compat layer](#sec:glossary) — the
+compatibility `streamSimple()` dispatch used on the coding-agent path. It
+chooses a built-in model registry or resolves an API provider from
+`model.api`, then passes a `Context` plus simple stream options to that
+provider. `src/models.ts` exposes a `Models` implementation that owns
 provider registration and routes model requests. Individual files such as
 `src/api/openai-responses.ts` and `src/api/anthropic-messages.ts` serialize
 the normalized context into a provider request and translate that provider's
@@ -244,7 +327,8 @@ semantics — independent of Pi's CLI or sessions.
 messages, tools, events, loop configuration, hooks, queue modes, and tool
 execution mode. `src/agent.ts` wraps that loop in the stateful `Agent` class.
 It owns current model, system prompt, tools, messages, active runs, abort
-controllers, and steering/follow-up queues.
+controllers, and the [steering and follow-up](#sec:glossary) queues (messages
+held back until the current run reaches the right point to receive them).
 
 `src/agent-loop.ts` is the important execution core. It:
 
@@ -252,14 +336,36 @@ controllers, and steering/follow-up queues.
 2. Lets a caller transform agent messages, then converts them to LLM messages.
 3. Builds a provider `Context` and consumes an async response stream.
 4. Validates model-produced tool arguments.
-5. Runs tools sequentially or with sequential preflight plus parallel
-   execution.
+5. Runs tools sequentially or with sequential [preflight](#sec:glossary) —
+   checking each tool call through `beforeToolCall` hooks one at a time
+   before any of them run — plus parallel execution of the allowed calls.
 6. Appends tool results and repeats until there are no tool calls or queued
    messages.
 
+```{mermaid}
+%%| label: fig-agent-loop
+%%| fig-cap: "One pass through the agent loop. The loop repeats until the model stops requesting tools and no queued steering or follow-up messages remain."
+flowchart TD
+  P["convert messages to LLM context<br/>(convertToLlm)"] --> S["stream provider response"]
+  S --> TC{"tool calls?"}
+  TC -->|"yes"| PF["preflight each call sequentially<br/>(beforeToolCall)"]
+  PF --> EX["execute allowed tools"]
+  EX --> R["append tool results"] --> P
+  TC -->|"no"| Q{"queued messages?"}
+  Q -->|"yes"| P
+  Q -->|"no"| DONE["run ends"]
+```
+
 The generic loop deliberately receives callbacks such as `convertToLlm`,
-`transformContext`, `beforeToolCall`, and `afterToolCall`. It therefore has no
-dependency on `SessionManager`, local disk tools, or the interactive TUI.
+`transformContext`, `beforeToolCall`, and `afterToolCall` instead of
+implementing those decisions itself. The reason is reuse and testability:
+because every Pi-specific decision arrives as a callback, the same loop runs
+under unit tests, the SDK, and other harnesses without importing a single
+coding-agent file. For example, coding-agent passes a `convertToLlm` that
+translates session message types into LLM messages, dropping durable-only
+entry data the provider should never see — the persistence half of that split
+is covered in [Persistence and context are different
+things](#sec:persistence-vs-context) below.
 
 ### `packages/coding-agent`: the Pi application
 
@@ -271,10 +377,15 @@ defines the `pi` binary as `dist/cli.js`. In source,
 `src/cli.ts` sets process-level behavior and calls `main(process.argv.slice(2))`
 from `src/main.ts`.
 
-`src/main.ts` parses command-line arguments, determines interactive/RPC/print
-mode, resolves trust and settings, creates the runtime, selects the model, and
-starts `InteractiveMode`, RPC mode, or print mode. It is composition and
-application policy, not the agent loop.
+`src/main.ts` parses command-line arguments, determines the run mode —
+interactive, [RPC](#sec:glossary) (remote procedure call: LF-delimited JSON
+over stdin/stdout, so another process can drive Pi without a terminal), or
+print (one prompt in, one response out) — resolves [trust](#sec:glossary)
+(the per-folder decision that permits project-local code and settings to
+load) and settings, creates the runtime, selects the model, and starts
+`InteractiveMode`, RPC mode, or print mode. It is the composition root — the
+one place that wires all the subsystems together — plus application policy,
+not the agent loop.
 
 The major coding-agent subsystems are listed below. Every path in the
 **Important files** column is relative to the coding-agent source directory:
@@ -330,27 +441,67 @@ flowchart TD
   A --> P["runPrintMode"]
 ```
 
-`createAgentSessionServices()` reloads the resource loader and applies provider
-registrations that extensions made during their factories. `createAgentSession()`
+`createAgentSessionServices()` reloads the resource loader and applies
+provider registrations that extensions made during their factories (an
+extension's default-exported setup function; [Your first
+extension](#sec:extensions) covers factories). `createAgentSession()`
 then resolves/restores a model and thinking level, creates an `Agent`, and
 wraps it in `AgentSession`. The `AgentSessionRuntime` class tears down the old
 extension/session runtime before applying a newly created one for operations
 such as session resume or fork.
 
-## Persistence and context are different things
+The same chain as code, reduced to the calls `main.ts` actually makes
+(`src/main.ts`, with session construction in `core/sdk.ts`):
+
+```ts
+// 1. Build the cwd-bound services: settings, auth, model registry,
+//    resource loader (which loads extensions, skills, prompts, themes).
+const services = await createAgentSessionServices({ cwd, agentDir, ... });
+
+// 2. Create the session from those services; internally this calls
+//    createAgentSession() in core/sdk.ts, which builds Agent + AgentSession.
+const { session } = await createAgentSessionFromServices({ services, ... });
+
+// 3. Hand the session to one run mode:
+//    new InteractiveMode(...), runRpcMode(...), or runPrintMode(...).
+```
+
+## Persistence and context are different things {#sec:persistence-vs-context}
 
 Architecture matters here because the session file and the model context are
 different representations owned by different layers: `SessionManager` in
 coding-agent owns the durable JSONL tree, while the context sent to the
-provider is rebuilt from it on every turn. The sessions chapter covers this
-boundary in detail — tree structure, `buildContextEntries()`, and the rule
-that `pi.appendEntry()` writes durable state the model never sees while
-`pi.sendMessage()` enters the conversation; see
-[the sessions chapter](#sec:sessions).
+provider is rebuilt from it on every turn.
 
-What belongs in this chapter is the ownership split for compaction.
-Compaction is a context transformation, not deletion: Pi writes a summary
-entry and reconstructs a compact context from the summary and newer entries.
+| | Durable session file | Provider context |
+|---|---|---|
+| Owned by | `SessionManager` (coding-agent) | The agent loop, rebuilt per turn |
+| Lifetime | Survives restarts and resumes | One request; recomputed next turn |
+| Contains | Every entry on every branch | Converted messages of the selected branch only |
+| Written by | `pi.appendEntry()`, messages, compaction | Never written — it is derived |
+
+The two extension calls sit on opposite sides of this line
+(`core/extensions/types.ts`):
+
+```ts
+// Durable only: appended to the session file, never sent to the model.
+pi.appendEntry("my-state", { lastCheck: "2026-07-20" });
+
+// Conversational: enters the session and becomes a message the model
+// sees on a later turn.
+pi.sendMessage({ customType: "my-notice", content: "check finished", display: true });
+```
+
+The sessions chapter covers this boundary in detail — tree structure,
+`buildContextEntries()`, and the rule that `pi.appendEntry()` writes durable
+state the model never sees while `pi.sendMessage()` enters the conversation;
+see [the sessions chapter](#sec:sessions).
+
+What belongs in this chapter is the ownership split for compaction. In plain
+terms: compaction rewrites what the model will see next; it deletes nothing
+from the file. Compaction is a context transformation, not deletion: Pi
+writes a summary entry and reconstructs a compact context from the summary
+and newer entries.
 The generic algorithms live one layer down in the `agent` harness (the
 reusable runtime code `agent` provides for consumers such as coding-agent),
 exported from `packages/agent/src/harness/compaction/`; coding-agent
@@ -380,7 +531,7 @@ The full reference table:
 | Add keyboard/editor/component capability reusable by TUIs | Terminal primitive, not Pi policy | `packages/tui/src/` |
 | Change Pi commands, session behavior, built-in tool policy | Application behavior or configuration | `packages/coding-agent/src/` |
 | Set values without adding executable behavior | **Configuration** in `settings.json` | Settings and resource-loading code |
-| Add a command, tool, hook, state, or request behavior | **Extension** loaded at runtime | Public `ExtensionAPI` and `07-your-first-extension.qmd` |
+| Add a command, tool, hook, state, or request behavior | **Extension** loaded at runtime | Public `ExtensionAPI` and [Your first extension](#sec:extensions) |
 | Give the model reusable procedural guidance | **Skill** loaded as contextual instructions | Resource loader and `skills/` |
 | Change colors and visual style | **Theme** consumed by renderers | Theme resources and TUI renderers |
 | Reuse a written user/model request | **Prompt** template or slash command | Prompt resources and command registration |
@@ -414,8 +565,22 @@ streaming, tool execution, persistence, and rendering.
 
 ## Beginner checkpoint
 
-Before continuing, name the owner for each change: a reusable terminal
-primitive, a provider serializer, a generic tool-loop rule, a Pi session rule,
-and a user-specific behavior. If you can point each one to `tui`, `ai`,
-`agent`, `coding-agent`, and an extension respectively, the package map is
-working.
+Before continuing, name the owner for each change:
+
+1. A reusable terminal primitive.
+2. A provider serializer.
+3. A generic tool-loop rule.
+4. A Pi session rule.
+5. A user-specific behavior.
+
+::: {.callout-note collapse="true"}
+## Solution
+
+1. `packages/tui`
+2. `packages/ai`
+3. `packages/agent`
+4. `packages/coding-agent`
+5. An extension — no package change at all.
+
+If you placed each one correctly, the package map is working.
+:::
