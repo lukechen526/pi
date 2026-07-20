@@ -10,6 +10,82 @@ the coding agent. The coding-agent package owns command-line behavior, local
 filesystem tools, project resources, session UX, and the extension API; the
 `agent` package should not learn those policies.
 
+## Pi's minimal defaults {#sec:minimal-defaults}
+
+Pi is deliberately a minimal coding harness: the design goal is the smallest
+core that still makes a viable agent, with everything else arriving through
+extensions, skills, prompts, and themes. Understanding that baseline explains
+both the package map and why the extension API is so prominent.
+
+**The default tool set is four tools.** A fresh session activates only
+`read`, `bash`, `edit`, and `write`
+(`defaultActiveToolNames` in `agent-session.ts`). Three more definitions —
+`grep`, `find`, and `ls` — ship but stay inactive until selected with
+`--tools`, an extension's `pi.setActiveTools()`, or a setting. The reasoning:
+a model with `bash` can already run `rg`, `find`, and `ls` itself, so Pi does
+not spend prompt space on dedicated tools for what the shell does. [Built-in
+tools](#sec:tools) covers the full registry and selection mechanics.
+
+**The base system prompt is about 15 lines.** `buildSystemPrompt()` in
+`core/system-prompt.ts` assembles a fixed base, then appends per-session
+context on top:
+
+```{mermaid}
+%%| label: fig-system-prompt-anatomy
+%%| fig-cap: "Anatomy of the default system prompt: a short fixed base (blue), then per-session additions (grey). --system-prompt swaps the base; --append-system-prompt only adds."
+flowchart TD
+  subgraph BASE["fixed base (~15 lines)"]
+    R["role sentence"] --> T["Available tools<br/>active tool snippets"] --> G["Guidelines +<br/>Pi docs block"]
+  end
+  subgraph ADD["appended per session"]
+    A["append text"] --> C["project_context files<br/>+ skills"] --> W["cwd line"]
+  end
+  X["--system-prompt"] -.->|"replaces"| R
+  G --> A
+  classDef base fill:#dbe7f5,stroke:#2f5b8f,color:#000000
+  classDef add fill:#e9e9e9,stroke:#666666,color:#000000
+  classDef repl fill:#fde2c4,stroke:#a05a00,stroke-dasharray:4 3,color:#000000
+  class R,T,G base
+  class A,C,W add
+  class X repl
+  style BASE fill:#f4f8fd,stroke:#2f5b8f
+  style ADD fill:#f7f7f7,stroke:#666666
+```
+
+The base opens with one role sentence ("You are an expert coding assistant
+operating inside pi, a coding agent harness") and three short sections:
+
+- `Available tools:` — built from the active tools' prompt snippets, so
+  changing the active set changes the prompt.
+- `Guidelines:` — encodes the minimalism directly. When `bash` is active but
+  `grep`/`find`/`ls` are not, the prompt says "Use bash for file operations
+  like ls, rg, find". The only unconditional rules are "Be concise in your
+  responses" and "Show file paths clearly when working with files".
+- A pointer block to Pi's own README/docs/examples, read only when the user
+  asks about Pi itself.
+
+There is no date line and no other behavioral boilerplate. The appended parts
+are `--append-system-prompt` text, `AGENTS.md` context files in a
+`<project_context>` wrapper, skills, and a final cwd line; [Customizing
+Pi](#sec:resources) covers those inputs. A `--system-prompt` replacement swaps
+the base out entirely while keeping the appended parts.
+
+**What Pi deliberately does not build in** (see the philosophy section of
+`packages/coding-agent/README.md`):
+
+| Not built in | Use instead |
+|---|---|
+| MCP integration | An extension, or CLI tools plus their READMEs |
+| Sub-agents | `examples/extensions/subagent/` |
+| Plan mode | `examples/extensions/plan-mode/` |
+| Built-in to-do lists | A `TODO.md` file (`examples/extensions/todo.ts` as code) |
+| Permission popups | `examples/extensions/permission-gate.ts` |
+| Background shell | tmux |
+
+Each is a considered "no" — the core stays small, and the extension surface
+carries the rest. The example extensions are the pattern in action: reference
+implementations you can adopt, not built-in behavior you must disable.
+
 ## What you will learn first
 
 Start with the package map, then follow the startup diagram, and only then read
@@ -54,7 +130,7 @@ from keystroke to provider request. The command is hypothetical, but every
 step names the real file that handles it:
 
 1. **Input.** You type `/hello-pi world` in the interactive mode
-   (`packages/coding-agent/src/modes/interactive/interactive-mode.ts`), which
+   (`modes/interactive/interactive-mode.ts` in coding-agent), which
    passes the text to `AgentSession.prompt()`.
 2. **Command dispatch.** `AgentSession.prompt()`
    (`packages/coding-agent/src/core/agent-session.ts`) sees the leading `/`
