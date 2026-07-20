@@ -242,7 +242,7 @@ provider adapter that speaks the vendor's wire protocol.
 This stage charts the coding-agent stream path from the snapshotted `Model` to a
 provider adapter. Model *catalog* selection and runtime changes belong to
 session creation and `/model` (see Stage 4's opening and
-`developer-guide/09-models-providers-and-auth.qmd`); they are not re-decided
+`developer-guide/11-models-providers-and-auth.qmd`); they are not re-decided
 here.
 
 Coding-agent installs a custom `streamFn` on `Agent` in `core/sdk.ts`. For each
@@ -295,7 +295,7 @@ sequenceDiagram
 Scope boundary for this chapter: the numbered path stops at adapter
 `streamSimple` and the three provider-extension insertion points. Vendor wire
 formats, transport negotiation, custom provider registration, and auth-storage
-details live in `developer-guide/09-models-providers-and-auth.qmd` and the
+details live in `developer-guide/11-models-providers-and-auth.qmd` and the
 provider-hook reference in
 `packages/coding-agent/docs/extensions.md` (`before_provider_headers`,
 `before_provider_request`, `after_provider_response`). Those headers/payload

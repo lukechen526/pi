@@ -380,7 +380,7 @@ The full reference table:
 | Add keyboard/editor/component capability reusable by TUIs | Terminal primitive, not Pi policy | `packages/tui/src/` |
 | Change Pi commands, session behavior, built-in tool policy | Application behavior or configuration | `packages/coding-agent/src/` |
 | Set values without adding executable behavior | **Configuration** in `settings.json` | Settings and resource-loading code |
-| Add a command, tool, hook, state, or request behavior | **Extension** loaded at runtime | Public `ExtensionAPI` and `24-your-first-extension.qmd` |
+| Add a command, tool, hook, state, or request behavior | **Extension** loaded at runtime | Public `ExtensionAPI` and `07-your-first-extension.qmd` |
 | Give the model reusable procedural guidance | **Skill** loaded as contextual instructions | Resource loader and `skills/` |
 | Change colors and visual style | **Theme** consumed by renderers | Theme resources and TUI renderers |
 | Reuse a written user/model request | **Prompt** template or slash command | Prompt resources and command registration |

@@ -9,12 +9,12 @@ cancellation, then continue directly to [architecture](#sec:architecture).
 - **Comfortable with TypeScript:** continue in this chapter, then read
   [architecture](#sec:architecture).
 - **JavaScript-only or new to TypeScript:** read the optional
-  [TypeScript foundations workbook](17-typescript-foundations-workbook.qmd)
+  [TypeScript foundations workbook](A1-typescript-foundations-workbook.qmd)
   first, then return here for Pi's patterns.
-- **Need one concept:** jump to the workbook's [Everyday Types](17-typescript-foundations-workbook.qmd#everyday-typescript-fundamentals),
-  [modules](17-typescript-foundations-workbook.qmd#modules-and-imports),
-  [unions](17-typescript-foundations-workbook.qmd#discriminated-unions-in-pi),
-  or [TypeBox practice](17-typescript-foundations-workbook.qmd#typebox-practice-from-external-data-to-a-tool-parameter).
+- **Need one concept:** jump to the workbook's [Everyday Types](A1-typescript-foundations-workbook.qmd#everyday-typescript-fundamentals),
+  [modules](A1-typescript-foundations-workbook.qmd#modules-and-imports),
+  [unions](A1-typescript-foundations-workbook.qmd#discriminated-unions-in-pi),
+  or [TypeBox practice](A1-typescript-foundations-workbook.qmd#typebox-practice-from-external-data-to-a-tool-parameter).
   It keeps the longer explanations, exercises, beginner mistakes, and
   reference tables that were moved out of this route.
 :::
@@ -52,7 +52,7 @@ The goal is recognition, not memorization. By the end you should be able to:
 - identify the source files and call sites to inspect before changing Pi.
 
 If a primitive, optional property, assertion, or nullish operator is unfamiliar,
-use the [Everyday Types foundations](17-typescript-foundations-workbook.qmd#everyday-typescript-fundamentals)
+use the [Everyday Types foundations](A1-typescript-foundations-workbook.qmd#everyday-typescript-fundamentals)
 in the workbook rather than stopping the Pi route.
 
 ## Setup and runtime orientation
@@ -136,7 +136,7 @@ mismatch (a property that does not exist). Note two things:
 2. Every TypeScript error answers the same three questions: *what value do I
    have, what did the code require, and where did they diverge?*
 
-The workbook's [common TypeScript errors](17-typescript-foundations-workbook.qmd#common-typescript-errors)
+The workbook's [common TypeScript errors](A1-typescript-foundations-workbook.qmd#common-typescript-errors)
 reference decodes the diagnostics you will meet most often in Pi.
 
 ### Pi's erasable TypeScript boundary
@@ -223,7 +223,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 Prefer public entry points over deep imports into another package's source.
 The public boundary is the contract used by published consumers. Default
 exports, re-exports, and module-resolution troubleshooting are covered in the
-workbook's [modules section](17-typescript-foundations-workbook.qmd#modules-and-imports).
+workbook's [modules section](A1-typescript-foundations-workbook.qmd#modules-and-imports).
 
 ## Discriminated unions
 
@@ -263,7 +263,7 @@ you handle it — the checker becomes your to-do list. This pattern matters in
 practice: Pi uses discriminated unions for agent events, message roles, content
 blocks, and session entries, all of which grow over time. Start at the union
 definition, then find each `if` or `switch` that consumes it. The workbook's
-[discriminated unions section](17-typescript-foundations-workbook.qmd#discriminated-unions-in-pi)
+[discriminated unions section](A1-typescript-foundations-workbook.qmd#discriminated-unions-in-pi)
 adds user-defined predicates and more narrowing forms.
 
 ## Callbacks and closures
@@ -304,7 +304,7 @@ function onMessage(handler: (text: string, source: string) => void): void {
 onMessage((text, _source) => console.log(text));
 ```
 
-The workbook's [callbacks section](17-typescript-foundations-workbook.qmd#functions-as-callbacks-and-closures)
+The workbook's [callbacks section](A1-typescript-foundations-workbook.qmd#functions-as-callbacks-and-closures)
 covers optional callback parameters, overloads, and the `this` pitfall when a
 class method is registered as a callback.
 
@@ -336,9 +336,9 @@ function readName(value: unknown): string | undefined {
 An assertion such as `value as User` changes only the checker's view. It does
 not convert, inspect, or repair the runtime value. Prefer `unknown` plus a
 narrowing guard, or a runtime schema when the boundary is shared. The workbook
-walks [one JSON value through four treatments](17-typescript-foundations-workbook.qmd#unknown-any-and-external-data)
+walks [one JSON value through four treatments](A1-typescript-foundations-workbook.qmd#unknown-any-and-external-data)
 and covers error handling at the same boundaries in
-[errors and exceptions](17-typescript-foundations-workbook.qmd#errors-and-exceptions).
+[errors and exceptions](A1-typescript-foundations-workbook.qmd#errors-and-exceptions).
 
 ## TypeBox: one schema, two views
 
@@ -372,7 +372,7 @@ effects, or enforce application rules such as “the path exists.”
 ### A Pi tool preview
 
 This is intentionally a **preview** of extension registration. The canonical,
-runnable staged example is in [Your first extension](24-your-first-extension.qmd#a-complete-first-extension);
+runnable staged example is in [Your first extension](07-your-first-extension.qmd#a-complete-first-extension);
 read that chapter for discovery, reload, permissions, and the complete API.
 
 ```ts
@@ -406,7 +406,7 @@ arguments before `execute`; and the returned `content` becomes the tool result.
 Pi passes five arguments to `execute`; the `_`-prefixed ones are part of the
 contract that this tool does not use. The optional signal should be forwarded
 to cancellable work. The workbook breaks this same example down field by field
-in [TypeBox in a Pi tool](17-typescript-foundations-workbook.qmd#typebox-in-a-pi-tool).
+in [TypeBox in a Pi tool](A1-typescript-foundations-workbook.qmd#typebox-in-a-pi-tool).
 
 ## Promises, streams, and cancellation
 
@@ -443,7 +443,7 @@ When reading Pi, follow the signal into the file, process, network, or provider
 operation. The owner creates or receives the `AbortController`; the operation
 must decide how to stop and clean up. Rejection, `Promise.all`, timeouts, and
 error behavior are covered in the workbook's
-[async section](17-typescript-foundations-workbook.qmd#promises-streams-and-abortsignal);
+[async section](A1-typescript-foundations-workbook.qmd#promises-streams-and-abortsignal);
 retry and parallel behavior in concrete contexts belong to the agent and tool
 chapters.
 
@@ -472,7 +472,7 @@ For a change, use this order:
 8. run the relevant check and inspect the diff.
 
 Continue with [architecture: packages, ownership, and entry points](#sec:architecture).
-Use [the workbook's guided source tour](17-typescript-foundations-workbook.qmd#guided-source-tour-a-custom-tool)
+Use [the workbook's guided source tour](A1-typescript-foundations-workbook.qmd#guided-source-tour-a-custom-tool)
 if you want a slower exercise before opening the repository.
 
 ## Closing checkpoint
@@ -490,13 +490,13 @@ which signal or cleanup method owns cancellation. Check yourself against the
    [install, run, and check](#install-run-and-check-are-different-actions).
 2. A type is a compile-time description the checker erases; a value is what
    exists while JavaScript runs. See the workbook's
-   [what TypeScript checks—and what it erases](17-typescript-foundations-workbook.qmd#what-typescript-checksand-what-it-erases).
+   [what TypeScript checks—and what it erases](A1-typescript-foundations-workbook.qmd#what-typescript-checksand-what-it-erases).
 3. `string | undefined` — the property may be absent. See
-   [object types and optional properties](17-typescript-foundations-workbook.qmd#object-types-and-optional-properties).
+   [object types and optional properties](A1-typescript-foundations-workbook.qmd#object-types-and-optional-properties).
 4. A runtime check such as `typeof value === "string"`. See
-   [union types and basic narrowing](17-typescript-foundations-workbook.qmd#union-types-and-basic-narrowing).
+   [union types and basic narrowing](A1-typescript-foundations-workbook.qmd#union-types-and-basic-narrowing).
 5. `as User` changes only the checker's view; it validates nothing at runtime.
-   See [type assertions](17-typescript-foundations-workbook.qmd#type-assertions).
+   See [type assertions](A1-typescript-foundations-workbook.qmd#type-assertions).
 
 ## Answers to the closing checkpoint
 
