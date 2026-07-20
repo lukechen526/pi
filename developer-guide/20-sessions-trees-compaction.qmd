@@ -80,11 +80,17 @@ can summarize that abandoned path and append a `branch_summary` at the
 navigation point so the new path keeps a concise account without replaying all
 old messages.
 
-```text
-old path:    common ancestor -> A -> B -> C
-new target:  common ancestor -> D -> E
-
-optional summary of A/B/C is appended near E
+```{mermaid}
+%%| label: fig-branch-summary
+%%| fig-cap: "Tree navigation with a branch summary. The abandoned path (grey) is no longer on the parent chain; Pi can append a branch_summary entry (green) near the navigation point so the new path keeps a concise account of it."
+flowchart TD
+  R["common ancestor"] --> A["A"] --> B["B"] --> C["C"]
+  R --> D["D"] --> E["E"]
+  E --> S["branch_summary:<br/>summary of A-B-C"]
+  classDef abandoned fill:#e9e9e9,stroke:#999999,color:#666666
+  classDef summary fill:#d7ecd7,stroke:#2e6b2e,color:#000000
+  class A,B,C abandoned
+  class S summary
 ```
 
 Configure this under `branchSummary` in the global or project settings files
@@ -109,23 +115,20 @@ message and explores a different plan. A linear transcript either loses one
 path or duplicates a large prefix into another file. Pi instead stores entries
 with an `id` and `parentId`. One file can represent both paths.
 
-```text
-Session file:
-  header  (metadata: type=session, version, id, cwd, optional parentSession)
-          # not a tree node; has no parentId and is never selected as a leaf
-
-Entry tree (linked only by entry parentId values):
-  user: "Investigate auth"
-    |
-    +-- assistant: plan A
-          |
-          +-- tool result: read auth.ts
-                |
-                +-- user: "Implement A"              <- old leaf
-                |
-                +-- branch_summary: "A explored ..."
-                      |
-                      +-- user: "Try plan B instead" <- current leaf
+```{mermaid}
+%%| label: fig-session-entry-tree
+%%| fig-cap: "One session file, two branches. Entries link by parentId; the header (dashed) is metadata, not a tree node. The old leaf (grey) stays on disk; the current leaf (amber) defines the active branch."
+flowchart TD
+  H["header: type=session, version,<br/>id, cwd, optional parentSession"]:::hdr
+  U1["user: Investigate auth"] --> A1["assistant: plan A"]
+  A1 --> T1["tool result: read auth.ts"]
+  T1 --> U2["user: Implement A"]:::oldleaf
+  T1 --> BS["branch_summary:<br/>A explored ..."]:::summary
+  BS --> U3["user: Try plan B instead"]:::leaf
+  classDef hdr fill:#f5f5f5,stroke:#666666,stroke-dasharray:4 3,color:#333333
+  classDef oldleaf fill:#e9e9e9,stroke:#999999,color:#666666
+  classDef summary fill:#d7ecd7,stroke:#2e6b2e,color:#000000
+  classDef leaf fill:#ffe9a8,stroke:#8a6d00,stroke-width:3px,color:#000000
 ```
 
 `parentSession` on the header records fork provenance across session files. It
@@ -140,31 +143,42 @@ active path rather than the whole session file.
 
 Step (a): chat a few messages. One file, one path, leaf at the end.
 
-```text
-session file A:
-  u1 -> a1 -> u2 -> a2          leaf: a2
+```{mermaid}
+%%| label: fig-leaf-step-a
+%%| fig-cap: "Step (a): a single linear path; the leaf (amber) sits at the last entry."
+flowchart LR
+  U1["u1"] --> A1["a1"] --> U2["u2"] --> A2["a2"]:::leaf
+  classDef leaf fill:#ffe9a8,stroke:#8a6d00,stroke-width:3px,color:#000000
 ```
 
 Step (b): `/tree` back to `u2` and continue with a different request. The
 new messages append as children of `u2`, so the file now holds two branches.
 The leaf moves to the new path; the old path is untouched on disk.
 
-```text
-session file A:
-  u1 -> a1 -> u2 -> a2          (old branch, unchanged)
-              |
-              +-> u3 -> a3      leaf: a3
+```{mermaid}
+%%| label: fig-leaf-step-b
+%%| fig-cap: "Step (b): continuing from u2 appends a second branch. The old branch (grey) is unchanged on disk; the leaf moves to a3."
+flowchart TD
+  U1["u1"] --> A1["a1"] --> U2["u2"]
+  U2 --> A2["a2"]:::dim
+  U2 --> U3["u3"] --> A3["a3"]:::leaf
+  classDef dim fill:#e9e9e9,stroke:#999999,color:#666666
+  classDef leaf fill:#ffe9a8,stroke:#8a6d00,stroke-width:3px,color:#000000
 ```
 
 Step (c): `/tree` again and select `a2`. Only the leaf pointer changes. Both
 branches remain in the file, and context for the next prompt is the chain
 `u1 -> a1 -> u2 -> a2`.
 
-```text
-session file A:
-  u1 -> a1 -> u2 -> a2          leaf: a2 (switched back)
-              |
-              +-> u3 -> a3
+```{mermaid}
+%%| label: fig-leaf-step-c
+%%| fig-cap: "Step (c): navigating back only moves the leaf. Both branches stay in the file; the next prompt's context is the chain from a2 to the root."
+flowchart TD
+  U1["u1"] --> A1["a1"] --> U2["u2"]
+  U2 --> A2["a2"]:::leaf
+  U2 --> U3["u3"]:::dim --> A3["a3"]:::dim
+  classDef dim fill:#e9e9e9,stroke:#999999,color:#666666
+  classDef leaf fill:#ffe9a8,stroke:#8a6d00,stroke-width:3px,color:#000000
 ```
 
 `/fork` performs the same jump to an earlier message but creates a **new
@@ -279,23 +293,32 @@ incoherent for the provider.
 If one turn exceeds `compaction.keepRecentTokens`, Pi may split it at an
 assistant message, never at a tool result. For example:
 
-```text
-summarized turn prefix                  retained suffix
-user -> assistant(tool A) -> result A | assistant(tool B) -> result B
-                                        ^ firstKeptEntryId
-                                        ^ isSplitTurn === true
-
-session_before_compact.preparation:
-  turnPrefixMessages   = [user, assistant(tool A), result A]
-  messagesToSummarize  = earlier complete turns (if any)
-  isSplitTurn          = true
+```{mermaid}
+%%| label: fig-split-turn
+%%| fig-cap: "A split turn. Older complete turns and the summarized turn prefix (grey) become turnPrefixMessages/messagesToSummarize; the retained suffix (green) starts at an assistant message - firstKeptEntryId - so tool call B stays beside result B."
+flowchart TD
+  ET["earlier complete turns<br/>messagesToSummarize"]:::cut
+  subgraph PREFIX["turnPrefixMessages"]
+    U["user"] --> AA["assistant(tool A)"] --> RA["result A"]
+  end
+  subgraph SUFFIX["retained suffix"]
+    AB["assistant(tool B)"] --> RB["result B"]
+  end
+  ET --> U
+  RA ==>|"cut: firstKeptEntryId"| AB
+  classDef cut fill:#e9e9e9,stroke:#999999,color:#666666
+  class U,AA,RA cut
+  class AB kept
+  classDef kept fill:#d7ecd7,stroke:#2e6b2e,stroke-width:3px,color:#000000
 ```
 
-Pi separately summarizes any older complete turns and the early prefix of this
-large turn, then merges those summaries. Here the retained suffix begins at
-`assistant(tool B)`, so tool call B remains beside result B. Extensions must
-handle both `turnPrefixMessages` and `messagesToSummarize` rather than assuming
-that compaction removes only whole user turns.
+The heavy edge is the cut: `firstKeptEntryId` names `assistant(tool B)` and
+`isSplitTurn` is `true`. Pi separately summarizes any older complete turns and
+the early prefix of this large turn, then merges those summaries. Here the
+retained suffix begins at `assistant(tool B)`, so tool call B remains beside
+result B. Extensions must handle both `turnPrefixMessages` and
+`messagesToSummarize` rather than assuming that compaction removes only whole
+user turns.
 
 ## Session names, labels, and human navigation
 
@@ -318,15 +341,20 @@ working directory. Replacement deliberately tears the old runtime down and
 builds a new one for the destination session; it does not mutate the previous
 session object into a new identity.
 
-```text
-request /resume, /new, /fork, or the matching extension command
-  -> session_before_switch or session_before_fork (may cancel)
-  -> session_shutdown on the old extension runtime
-  -> old AgentSession disposed
-  -> services and AgentSession created for the target cwd/session
-  -> session_start on the new extension instance
-  -> host rebinds UI/extension runtime to the new session
-  -> optional withSession callback receives a fresh context
+```{mermaid}
+%%| label: fig-session-replacement
+%%| fig-cap: "Session replacement: hooks (amber) bracket runtime teardown and rebuild."
+flowchart TD
+  REQ["/resume, /new, /fork, or extension command"]
+  GATE{"session_before_switch /<br/>session_before_fork"}:::hook
+  SHUT["session_shutdown: old runtime disposed"]:::hook
+  BUILD["services and AgentSession rebuilt"]
+  START["session_start: host rebinds UI"]:::hook
+  CB["withSession gets fresh context"]
+  REQ --> GATE
+  GATE -->|"not cancelled"| SHUT
+  SHUT --> BUILD --> START --> CB
+  classDef hook fill:#fde2c4,stroke:#a05a00,color:#000000
 ```
 
 Extension commands call `ctx.newSession`, `ctx.switchSession`, or `ctx.fork`.
@@ -409,20 +437,20 @@ or compaction semantics and may become inconsistent with the transcript.
 `buildContextEntries()` is the intermediate view used by the interactive
 transcript and session context construction. At a high level:
 
-```text
-all persisted entries
-       |
-       v
-walk parent links from active leaf to root
-       |
-       v
-reverse into chronological active path
-       |
-       v
-apply the latest effective compaction boundary
-       |
-       v
-context entries for rendering and conversion
+```{mermaid}
+%%| label: fig-build-context
+%%| fig-cap: "Building context from a selected leaf: the compaction boundary substitutes the summary and keeps entries from firstKeptEntryId."
+flowchart TD
+  ALL["all persisted entries"]
+  WALK["walk parent links leaf-to-root,<br/>reverse into chronological path"]
+  COMP{"compaction entry<br/>present?"}
+  PASS["active path unchanged"]
+  SUB["summary replaces older span;<br/>keep from firstKeptEntryId"]
+  OUT["context entries"]:::out
+  ALL --> WALK --> COMP
+  COMP -->|"no"| PASS --> OUT
+  COMP -->|"yes"| SUB --> OUT
+  classDef out fill:#d7ecd7,stroke:#2e6b2e,color:#000000
 ```
 
 When no compaction entry exists, that active path passes through unchanged and

@@ -47,18 +47,21 @@ the model calls `read`, then `bash`, then answers.
 
 ```{mermaid}
 %%| label: fig-prompt-lifecycle-overview
-%%| fig-cap: "The complete interactive prompt path. Stages 1-2 happen before any model work; stages 6-8 repeat once per turn; stages 9-10 settle the run."
+%%| fig-cap: "The complete interactive prompt path. Stages 1-2 (blue) happen before any model work; stages 6-8 (amber) repeat once per turn; stages 9-10 (grey) settle the run."
 flowchart TD
-  S1["1-2. Input and interception"]
-  S3["3. Turn construction"]
-  S45["4-5. Context and dispatch"]
-  S6["6. Streaming events"]
-  S7["7. Tool execution"]
+  S1["1-2. Input and interception"]:::input
+  S3["3. Turn construction"]:::turn
+  S45["4-5. Context and dispatch"]:::turn
+  S6["6. Streaming events"]:::turn
+  S7["7. Tool execution"]:::turn
   S8{"8. Another turn?"}
-  S9["9-10. Persistence<br/>and settlement"]
+  S9["9-10. Persistence<br/>and settlement"]:::settle
   S1 --> S3 --> S45 --> S6 --> S7 --> S8
   S8 -->|"yes"| S45
   S8 -->|"no"| S9
+  classDef input fill:#dbe7f5,stroke:#2f5b8f,color:#000000
+  classDef turn fill:#fde2c4,stroke:#a05a00,color:#000000
+  classDef settle fill:#e9e9e9,stroke:#666666,color:#000000
 ```
 
 ## Stage 1: Terminal input enters the TUI
@@ -167,6 +170,17 @@ add messages or override the system prompt before the loop takes over;
 adjust the message list, and then converts the result into the exact format the
 provider API expects.
 
+```{mermaid}
+%%| label: fig-context-boundaries
+%%| fig-cap: "Stage 4's three construction boundaries. The extension context event (amber) sits between base system-prompt assembly and provider conversion; the output is a Context with exactly systemPrompt, messages, and tools."
+flowchart TD
+  SP["base system prompt<br/>_rebuildSystemPrompt()"] --> TC["transformContext<br/>extension context event"]:::hook
+  TC --> CL["convertToLlm()"]
+  CL --> CTX["Context:<br/>systemPrompt + messages + tools"]:::out
+  classDef hook fill:#fde2c4,stroke:#a05a00,color:#000000
+  classDef out fill:#d7ecd7,stroke:#2e6b2e,color:#000000
+```
+
 | Boundary | Owner in the runtime | What it produces |
 |----------------|------------------------------------------|-------------------------------|
 | Base system-prompt assembly | `AgentSession._rebuildSystemPrompt()` and `buildSystemPrompt()` | System-prompt text from cwd, context files, skills, prompts, and active-tool guidance |
@@ -263,16 +277,19 @@ The sequence below summarizes stages 3-6 for one turn of the running example:
 
 ```{mermaid}
 %%| label: fig-turn-sequence
-%%| fig-cap: "One turn across stages 3-6: turn construction, context conversion, provider dispatch, and the event stream back to the session."
-flowchart TD
-  N1["Editor -> Session:<br/>prompt(text)"]
-  N2["Session -> Extensions:<br/>before_agent_start"]
-  N3["Session -> Agent loop:<br/>prompt(messages)"]
-  N4["Agent loop: context event,<br/>then convertToLlm()"]
-  N5["Agent loop -> Provider:<br/>streamSimple"]
-  N6["Provider --> Agent loop --> Session:<br/>stream becomes message events"]
-  N7["Agent loop: tool_call gate, execute tools,<br/>toolResult --> Session"]
-  N1 --> N2 --> N3 --> N4 --> N5 --> N6 --> N7
+%%| fig-cap: "One turn across stages 3-6: turn construction, context conversion, provider dispatch, and the event stream back to the session. The turn begins when the editor calls AgentSession.prompt(text)."
+sequenceDiagram
+  participant S as AgentSession
+  participant X as Extensions
+  participant L as Agent loop
+  S->>X: before_agent_start
+  S->>L: prompt(messages)
+  L->>X: context event, convertToLlm
+  L->>L: streamSimple to provider
+  L-->>S: message events
+  L->>X: tool_call gate
+  L->>L: execute tools
+  L-->>S: toolResult
 ```
 
 Scope boundary for this chapter: the numbered path stops at adapter
@@ -390,12 +407,14 @@ stop:
 %%| fig-cap: "After a toolResult is appended, the loop decides what happens next. Queued steering beats follow-up; an empty loop emits agent_end."
 flowchart TD
   Q1{"tool calls and<br/>not terminating?"}
-  Q1 -->|"yes"| NT["next model turn"]
+  Q1 -->|"yes"| NT["next model turn"]:::cont
   Q1 -->|"no"| Q2{"steering queued?"}
   Q2 -->|"yes"| NT
   Q2 -->|"no"| Q3{"follow-up queued?"}
   Q3 -->|"yes"| NT
-  Q3 -->|"no"| END["agent_end"]
+  Q3 -->|"no"| END["agent_end"]:::term
+  classDef cont fill:#d7ecd7,stroke:#2e6b2e,color:#000000
+  classDef term fill:#e9e9e9,stroke:#666666,color:#000000
 ```
 
 A tool can return `terminate: true` to hint that the next model call should be
@@ -441,12 +460,17 @@ nothing automatic is left to do.
 %%| fig-cap: "Run lifecycle. Retries and compaction resume the run; agent_end fires when the loop stops, agent_settled when no automatic continuation remains."
 stateDiagram-v2
   running: running
+  retrying: retrying
+  compacting: compacting
+  ended: agent_end<br/>loop stopped
+  settled: agent_settled<br/>no retry or queue left
+  aborted: aborted
   running --> retrying: provider error
   running --> compacting: context too large
   retrying --> running
   compacting --> running
-  running --> ended: agent_end
-  ended --> settled: agent_settled<br/>no retry or queue left
+  running --> ended
+  ended --> settled
   running --> aborted: Esc / abort signal
 ```
 
