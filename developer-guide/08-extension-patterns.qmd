@@ -11,6 +11,8 @@ Patterns progress by surface area: **basic** patterns observe or intercept; **in
 ```{mermaid}
 %%| label: fig-pattern-tiers
 %%| fig-cap: "Chapter roadmap. Each tier builds on the previous one; stop at the smallest tier that solves your task."
+%%| fig-width: 5.8
+%%{init: {"flowchart": {"nodeSpacing": 10, "rankSpacing": 10}, "themeVariables": {"fontSize": "11px"}}}%%
 flowchart LR
   T1["Tier 1: observe and intercept<br/>safety gate · inject context"]
   T2["Tier 2: tools and state<br/>durable state · dynamic tools ·<br/>UI, sessions, queues"]
