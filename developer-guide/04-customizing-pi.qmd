@@ -82,8 +82,14 @@ For example:
 ```json
 // ~/.pi/agent/settings.json (global)
 {
-  "compaction": { "enabled": true, "reserveTokens": 16384 },
-  "extensions": ["~/.pi/agent/extensions/shared.ts", "~/.pi/agent/extensions/audit.ts"],
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 16384
+  },
+  "extensions": [
+    "~/.pi/agent/extensions/shared.ts",
+    "~/.pi/agent/extensions/audit.ts"
+  ],
   "skills": ["~/.pi/agent/skills/review.md"],
   "themes": ["~/.pi/agent/themes/dark.json"]
 }
@@ -169,7 +175,11 @@ provider, so they are not merely transcript retention preferences.
 
 ```json
 {
-  "compaction": { "enabled": true, "reserveTokens": 16384, "keepRecentTokens": 20000 },
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 16384,
+    "keepRecentTokens": 20000
+  },
   "branchSummary": { "skipPrompt": true }
 }
 ```
@@ -388,7 +398,7 @@ the built-in `dark.json` with values changed:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "$schema": "theme-schema.json",
   "name": "team-dark",
   "vars": { "brand": "#00aaff" },
   "colors": {

@@ -269,7 +269,10 @@ export default function register(pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       greetingCount += 1;
       pi.appendEntry("hello-pi-count", { count: greetingCount });
-      ctx.ui.notify(`Hello, ${args || "world"}! (greeting #${greetingCount})`, "info");
+      ctx.ui.notify(
+        `Hello, ${args || "world"}! (greeting #${greetingCount})`,
+        "info",
+      );
     },
   });
 

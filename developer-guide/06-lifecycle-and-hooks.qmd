@@ -161,7 +161,10 @@ export default function (pi: ExtensionAPI) {
   // Ordinary text: rewrite it before skill/template expansion.
   pi.on("input", async (event) => {
     if (event.text.startsWith("?quick "))
-      return { action: "transform", text: `Respond briefly: ${event.text.slice(7)}` };
+      return {
+        action: "transform",
+        text: `Respond briefly: ${event.text.slice(7)}`,
+      };
   });
 }
 ```
@@ -640,13 +643,13 @@ work, clean up session-bound resources on `session_shutdown`, and use
 All source paths in this chapter are relative to the repository root. For a
 live trace, start at these symbols in order:
 
-1. `InteractiveMode.run()` and `getUserInput()` in
+1. `InteractiveMode.run()` and `getUserInput()` in\
    `packages/coding-agent/src/modes/interactive/interactive-mode.ts`.
-2. `AgentSession.prompt()` and `_runAgentPrompt()` in
+2. `AgentSession.prompt()` and `_runAgentPrompt()` in\
    `packages/coding-agent/src/core/agent-session.ts`.
 3. `Agent.prompt()`, `createLoopConfig()`, and `processEvents()` in
    `packages/agent/src/agent.ts`.
-4. `runAgentLoop()`, `streamAssistantResponse()`, and `executeToolCalls()` in
+4. `runAgentLoop()`, `streamAssistantResponse()`, and `executeToolCalls()` in\
    `packages/agent/src/agent-loop.ts`.
 5. `streamSimple()` in `packages/ai/src/compat.ts`.
 6. The `streamSimple` function in the selected provider API adapter.

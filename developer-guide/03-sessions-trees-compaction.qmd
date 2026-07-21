@@ -244,7 +244,13 @@ Each persisted session is a `.jsonl` file. Its first line is a file header, for
 example:
 
 ```json
-{"type":"session","version":3,"id":"<id>","timestamp":"<timestamp>","cwd":"/work/project"}
+{
+  "type": "session",
+  "version": 3,
+  "id": "<id>",
+  "timestamp": "<timestamp>",
+  "cwd": "/work/project"
+}
 ```
 
 The header's `id` identifies the session, not a node. Unlike every subsequent

@@ -344,7 +344,8 @@ held back until the current run reaches the right point to receive them).
 
 ```{mermaid}
 %%| label: fig-agent-loop
-%%| fig-cap: "One pass through the agent loop. The loop repeats until the model stops requesting tools and no queued steering or follow-up messages remain."
+%%| fig-cap: "Agent loop: tool calls are preflighted, executed, and appended before the loop repeats."
+%%| fig-width: 5.8
 flowchart TD
   P["convert messages to LLM context<br/>(convertToLlm)"] --> S["stream provider response"]
   S --> TC{"tool calls?"}

@@ -27,6 +27,8 @@ an interactive Pi session.
 ```{mermaid}
 %%| label: fig-package-lifecycle
 %%| fig-cap: "Package lifecycle: the author declares resources in a `pi` manifest and publishes; the user installs from a source; the resource loader discovers the package's resources, subject to the same trust gate as other project-local resources."
+%%| fig-width: 6.2
+%%{init: {"flowchart": {"nodeSpacing": 8, "rankSpacing": 8}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
   author["Author: pi manifest<br/>in package.json"] --> publish["Publish to npm<br/>or push to git"]
   publish --> install["User: pi install or<br/>packages setting"]
