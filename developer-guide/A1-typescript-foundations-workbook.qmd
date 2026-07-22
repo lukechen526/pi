@@ -2226,11 +2226,13 @@ short.) Reading notes:
 5. The payload types (`AgentMessage`, `ToolResultMessage`) are imported names;
    follow them with go-to-definition when you need their shapes.
 
-For a consumer, open `packages/agent/src/agent-loop.ts` and look at the
-`emit({ type: "agent_start" })` calls and the streaming loop that matches on
-`event.type` before emitting `message_start`/`message_update`/`message_end`.
-The `emit` calls construct the union members; the UI subscribers narrow them.
-The guided tour in [Part 5](#apply-the-basics-to-pi) builds on this excerpt.
+For the producer side, open `packages/agent/src/agent-loop.ts` and look at the
+`emit({ type: "agent_start" })` calls and the provider-event switch that emits
+`message_start`/`message_update`/`message_end`. For an `AgentEvent` consumer,
+open `packages/agent/src/agent.ts` and inspect `Agent.processEvents()`. The
+`emit` calls construct union members; `processEvents()` and UI subscribers
+consume and narrow them. The guided tour in [Part 5](#apply-the-basics-to-pi)
+builds on this excerpt.
 
 #### User-defined predicates and exhaustive unions
 
@@ -2600,15 +2602,16 @@ try {
 ```
 
 Exceptions and the `Result`-style unions from the discriminated-unions
-section solve the same problem at different distances. Pi tools throw on
-failure and let the runtime convert the exception into a tool result; Pi's
-own control flow prefers returned unions such as `{ ok: true } | { ok: false }`
-where a caller must narrow. When you read Pi code, ask which convention the
-function chose: a thrown exception crosses layers, a returned union is
-handled by the immediate caller. The
-[failure and recovery reference](18-failure-and-recovery-reference.qmd) covers
-the runtime side: retries, cancellation during failure, and user-facing
-errors.
+section solve the same problem at different distances. Pi tools may return a
+structured error result or throw from `execute`; thrown execution errors are
+converted by the loop, while validation, not-found, block, and other preflight
+errors can be generated directly as tool results. Pi's own control flow often
+prefers returned unions such as `{ ok: true } | { ok: false }` where a caller
+must narrow. When you read Pi code, ask which convention the function chose: a
+thrown exception crosses layers, while a returned union or result is handled by
+the immediate caller. The [failure and recovery
+reference](18-failure-and-recovery-reference.qmd) covers the runtime side:
+retries, cancellation during failure, and user-facing errors.
 
 **Checkpoint:** Why is the `catch` variable typed `unknown` instead of
 `Error`? What does `instanceof Error` prove about a caught value? What does
@@ -3006,7 +3009,7 @@ const ToolConfigSchema = Type.Object({
   ),
 });
 
-type ToolConfig = Static<typeof ToolConfig>;
+type ToolConfig = Static<typeof ToolConfigSchema>;
 ```
 
 Read each builder by the value it accepts:
@@ -3046,7 +3049,7 @@ if (errors.length > 0) {
   const first = errors[0];
   console.log(`Invalid config at ${first.instancePath || "/"}: ${first.message}`);
 }
-// Invalid config at /caseSensitive: expected boolean
+// Invalid config at /caseSensitive: must be boolean
 ```
 
 Unlike `Value.Check`, `Value.Errors` does not stop at the first problem, so
@@ -3545,11 +3548,11 @@ open; three starters:
   only after understanding the small example above.
 - **An agent event.** Start with the `AgentEvent` excerpt in
   [Discriminated unions in Pi](#discriminated-unions-in-pi), then open the
-  real union in `packages/agent/src/types.ts` and a consumer in
-  `packages/agent/src/agent-loop.ts`. For one event, answer: which literal
-  selects the branch, which fields are available after narrowing, is the
-  event emitted immediately or stored, and what happens if a new variant is
-  added.
+  real union in `packages/agent/src/types.ts`, the producer in
+  `packages/agent/src/agent-loop.ts`, and the consumer in
+  `packages/agent/src/agent.ts`. For one event, answer: which literal selects
+  the branch, which fields are available after narrowing, is the event emitted
+  immediately or stored, and what happens if a new variant is added.
 - **State and lifecycle.** When reading agent state, trace ownership: which
   object owns the array, is a shallow snapshot enough, which callback is
   stored for later, which signal reaches the I/O operation, and which method

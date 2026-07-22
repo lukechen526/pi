@@ -124,11 +124,11 @@ Now introduce a mistake: change `user.name` to `user.nmae` and check again:
 
 ```text
 $ npx tsgo --noEmit hello.ts
-hello.ts:4:27 - error TS2339: Property 'nmae' does not exist on type 'User'.
+hello.ts:5:28 - error TS2339: Property 'nmae' does not exist on type 'User'.
 ```
 
-Read the diagnostic left to right: the file and position (`hello.ts`, line 4,
-column 27), the error code (`TS2339`), the value you have (`User`), and the
+Read the diagnostic left to right: the file and position (`hello.ts`, line 5,
+column 28), the error code (`TS2339`), the value you have (`User`), and the
 mismatch (a property that does not exist). Note two things:
 
 1. `node --experimental-strip-types hello.ts` still runs the misspelled file
@@ -456,7 +456,7 @@ these packages:
 |---|---|---|---|
 | `packages/tui` | reusable terminal rendering primitives | `src/index.ts`, `src/tui.ts` | open `src/tui.ts` and find one interface with a literal-union property |
 | `packages/ai` | models, provider dispatch, and streaming contracts | `src/index.ts`, `src/types.ts` | open `src/types.ts` and list three literal `type` tags |
-| `packages/agent` | provider-independent loop, messages, and tools | `src/agent.ts`, `src/agent-loop.ts` | find the `AgentEvent` union in `src/types.ts`, then one `switch` that consumes it in `src/agent-loop.ts` |
+| `packages/agent` | provider-independent loop, messages, and tools | `src/agent.ts`, `src/agent-loop.ts` | find the `AgentEvent` union in `src/types.ts`, then one consumer switch in `src/agent.ts` |
 | `packages/coding-agent` | CLI, sessions, built-in tools, resources, extensions | `src/main.ts`, `src/core/sdk.ts` | open `examples/extensions/hello.ts` and identify the schema, the callback, and the signal |
 
 For a change, use this order:

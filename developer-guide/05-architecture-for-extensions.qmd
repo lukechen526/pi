@@ -16,7 +16,7 @@ monorepo (a single repository containing several separately published
 packages) and open it in an editor to follow along:
 
 ```bash
-git clone https://github.com/earendil-works/pi-mono.git
+git clone https://github.com/earendil-works/pi.git
 ```
 
 Every path in this chapter is relative to that repository root.
@@ -78,8 +78,10 @@ flowchart TD
   style ADD fill:#f7f7f7,stroke:#666666
 ```
 
-The base opens with one role sentence ("You are an expert coding assistant
-operating inside pi, a coding agent harness") and three short sections:
+The base opens with two role sentences: "You are an expert coding assistant
+operating inside pi, a coding agent harness" and "You help users by reading
+files, executing commands, editing code, and writing new files." It then has
+three short sections:
 
 - `Available tools:` — built from the active tools' prompt snippets, so
   changing the active set changes the prompt.
@@ -125,18 +127,20 @@ point** is the file where a feature or application begins. A **boundary** is a
 place where one representation becomes another, such as a provider (an external
 model API such as Anthropic or OpenAI) message becoming an agent event.
 
-Five packages exist so that the terminal UI, the agent loop, and the
-provider code can each be reused and tested without the others: `tui` knows
-nothing about models, `agent` knows nothing about the CLI, and `ai` knows
-nothing about sessions. As an extension author you mainly need three of them:
+Five direct packages under `packages/*` provide reusable terminal, loop, and
+provider layers; nested storage and example workspaces are separate. The
+layers can be reused and tested without the others: `tui` knows nothing about
+models, `agent` knows nothing about the CLI, and `ai` knows nothing about
+sessions. As an extension author you mainly need three of them:
 `coding-agent` is your home, `agent` is the loop your prompts run through, and
-`ai` is where model requests end up. `tui` and `orchestrator` can wait.
+`ai` provides provider contracts. `tui` and the experimental `server` package
+can wait.
 
 ```{mermaid}
 %%| label: fig-package-map
 %%| fig-cap: "The package map. An arrow points from a package to the package it imports; lower layers never import higher ones."
 flowchart TD
-  O["orchestrator<br/>(experimental)"] --> CA
+  SERVER["server<br/>(experimental supervisor/RPC)"] --> CA
   CA["coding-agent<br/>CLI, sessions, tools, extensions"]
   TUI["tui<br/>terminal primitives"]
   AG["agent<br/>generic tool loop"]
@@ -183,10 +187,12 @@ pi -e packages/coding-agent/examples/extensions/commands.ts
    which re-enters `AgentSession.prompt()` and starts a model turn.
 4. **Agent loop.** The turn runs in `packages/agent/src/agent-loop.ts`:
    agent messages are converted to LLM messages via `convertToLlm`, a
-   provider `Context` is built, and the loop calls its stream function —
-   `streamSimple()` by default.
-5. **AI dispatch.** `streamSimple()` in `packages/ai/src/compat.ts` resolves
-   the API implementation from `model.api` via the api-registry.
+   provider `Context` is built, and the loop calls its configured stream
+   function. Generic `Agent` uses an explicit `streamFn` or the process-wide
+   default; coding-agent wires `ModelRuntime.streamSimple()`.
+5. **Provider dispatch.** `core/sdk.ts` calls `ModelRuntime.streamSimple()`,
+   which prepares auth and headers and streams through the composed provider
+   selected for the model's API.
 6. **Provider request.** The resolved module — for example
    `packages/ai/src/api/anthropic-messages.ts` — serializes the `Context`
    into that provider's JSON, sends the HTTP request, and translates the
@@ -249,7 +255,7 @@ the subsections below add detail per package.
 | `packages/ai` | Provider protocol JSON or streaming | `packages/ai/src/index.ts` |
 | `packages/agent` | A loop rule for every consumer | `packages/agent/src/agent-loop.ts` |
 | `packages/coding-agent` | Pi application behavior | `packages/coding-agent/src/main.ts` |
-| `packages/orchestrator` | Multi-process orchestration (experimental) | — |
+| `packages/server` | Supervisor/RPC process management (experimental) | `packages/server/src/supervisor.ts` |
 
 ### `packages/tui`: terminal rendering primitives
 
@@ -310,15 +316,15 @@ events — `start`, `text_delta` chunks, `thinking_delta` chunks,
 provider produced the response. Callers never parse provider JSON; the
 provider module under `src/api/` already translated it.
 
-`src/compat.ts` supplies the [compat layer](#sec:glossary) — the
-compatibility `streamSimple()` dispatch used on the coding-agent path. It
-chooses a built-in model registry or resolves an API provider from
-`model.api`, then passes a `Context` plus simple stream options to that
-provider. `src/models.ts` exposes a `Models` implementation that owns
-provider registration and routes model requests. Individual files such as
-`src/api/openai-responses.ts` and `src/api/anthropic-messages.ts` serialize
-the normalized context into a provider request and translate that provider's
-stream back into Pi events.
+`src/compat.ts` supplies the [compat layer](#sec:glossary), a legacy/default
+compatibility `streamSimple()` dispatch for callers that do not provide a
+stream function. The coding-agent request path instead uses
+`core/sdk.ts` → `ModelRuntime.streamSimple()` → the composed provider. The
+runtime composes built-in catalogs, configuration, extension registrations,
+and auth before the provider adapter handles the request. Individual files
+such as `src/api/openai-responses.ts` and `src/api/anthropic-messages.ts`
+serialize the normalized context into a provider request and translate that
+provider's stream back into Pi events.
 
 ### `packages/agent`: generic conversation and tool loop
 
@@ -401,13 +407,13 @@ that relative path.
 
 | Subsystem | Responsibility | Important files |
 |---|---|---|
-| Session composition | Create settings, auth, model registry, resources, agent session | `core/sdk.ts`, `core/agent-session-services.ts` |
+| Session composition | Create settings, auth/model runtime, resources, agent session | `core/sdk.ts`, `core/agent-session-services.ts` |
 | Runtime replacement | Own a session plus cwd-bound services across new/resume/fork | `core/agent-session-runtime.ts` |
 | Session policy | Prompt preprocessing, resource/system prompt assembly, retries, compaction, extension event bridge | `core/agent-session.ts` |
 | Durable transcript | JSONL session entries, tree branches, context reconstruction | `core/session-manager.ts`, `core/messages.ts` |
 | Resources | Load extensions, skills, prompts, themes, and context files | `core/resource-loader.ts`, `core/extensions/loader.ts` |
 | Configuration | Global/project settings and defaults | `core/settings-manager.ts`, `core/defaults.ts` |
-| Model/auth resolution | Registered models, dynamic providers, credential lookup | `core/model-registry.ts`, `core/auth-storage.ts` |
+| Model/auth resolution | Canonical model catalogs, composed providers, credential lookup | `core/model-runtime.ts`, `core/model-registry.ts` (extension-facing facade), `core/auth-storage.ts` |
 | Built-in tools | Read, bash, edit, write, search, file mutation coordination | `core/tools/`, `utils/tools-manager.ts` |
 | Interactive app | Chat transcript, editor, dialogs, commands, renderer adapters (translation layers between session data and TUI components) | `modes/interactive/interactive-mode.ts`, `modes/interactive/components/` |
 | Extensions | Types, discovery/loading, event dispatch, context wrappers | `core/extensions/types.ts`, `core/extensions/loader.ts`, `core/extensions/runner.ts`, `core/extensions/wrapper.ts` |
@@ -421,13 +427,14 @@ coding-agent exports come from `src/index.ts`; extension authors should import
 from the package root rather than internal paths unless an API is explicitly
 documented for that purpose.
 
-### `packages/orchestrator`: experimental process orchestration
+### `packages/server`: experimental process orchestration
 
-**You work here when** a change concerns multi-process orchestration, not
-normal prompt processing. This package is experimental.
+**You work here when** a change concerns supervisor or RPC process management,
+not normal prompt processing. This package is experimental and contains the
+server-side process-management surface.
 
-It is experimental and outside the normal extension path. Treat it as a
-separate surface for multi-process orchestration, not as a hidden prompt stage.
+It is outside the normal extension path. Treat it as a separate surface for
+supervisor/RPC orchestration, not as a hidden prompt stage.
 
 ## Constructing a running coding-agent session
 
@@ -439,7 +446,7 @@ session changes its working directory:
 %%| fig-cap: "Startup construction. Services are built first, the session wraps an Agent around them, then one of the three run modes takes over."
 flowchart TD
   M["main.ts"] --> R["createAgentSessionRuntime()"]
-  R --> S["createAgentSessionServices()<br/>settings, auth, model registry,<br/>resource loader"]
+  R --> S["createAgentSessionServices()<br/>settings, auth/model runtime,<br/>resource loader"]
   S --> FS["createAgentSessionFromServices()"]
   FS --> C["createAgentSession()<br/>in core/sdk.ts"]
   C --> A["Agent + AgentSession<br/>+ tool registry"]
@@ -461,7 +468,7 @@ The same chain as code, reduced to the calls `main.ts` actually makes
 (`src/main.ts`, with session construction in `core/sdk.ts`):
 
 ```ts
-// 1. Build the cwd-bound services: settings, auth, model registry,
+// 1. Build the cwd-bound services: settings, auth/model runtime,
 //    resource loader (which loads extensions, skills, prompts, themes).
 const services = await createAgentSessionServices({ cwd, agentDir, ... });
 

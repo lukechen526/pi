@@ -547,19 +547,18 @@ session creation and `/model` (see Stage 4's opening and [Models, providers,
 and authentication](#sec:models)); they are not re-decided here.
 
 Coding-agent installs a custom `streamFn` on `Agent` in `core/sdk.ts`:
-`streamFn` is the function the agent loop calls for every model request, and it
-defaults to `streamSimple()` from the [compat layer](#sec:glossary) — the
-compatibility API in `packages/ai/src/compat.ts` that resolves a provider
-implementation from `model.api` and streams through it. For each assistant
-request the path is:
+`streamFn` is the function the agent loop calls for every model request. Its
+coding-agent path is `core/sdk.ts` → `ModelRuntime.streamSimple()` → the
+composed provider and its adapter. For each assistant request the path is:
 
 1. `streamAssistantResponse()` (agent-loop) calls `streamFn(model, context,
    options)` with the snapshotted model and the Stage 4 `Context`.
-2. The `streamFn` first resolves auth: it looks up credentials with
-   `modelRegistry.getApiKeyAndHeaders(model)` and merges provider-attribution
-   and request headers (`mergeProviderAttributionHeaders`). Then it emits the
-   extension `before_provider_headers` event so handlers can mutate the
-   assembled headers before anything is sent:
+2. `streamFn` calls `ModelRuntime.streamSimple()`. Its request preparation calls
+   `ModelRuntime.getAuth(model, ...)`, which resolves stored/configured or
+   ambient provider credentials and combines resolved auth headers with
+   request headers. Coding-agent then applies provider-attribution headers and
+   emits the extension `before_provider_headers` event so handlers can mutate
+   the assembled map before anything is sent:
 
    ```typescript
    pi.on("before_provider_headers", (event, ctx) => {
@@ -570,24 +569,20 @@ request the path is:
    });
    ```
 
-3. With headers ready, `streamFn` calls `streamSimple(model, context, options)`
-   from `packages/ai/src/compat.ts`, passing `apiKey`, merged headers,
-   timeouts, and retries. Agent core also forwards `onPayload` / `onResponse`
-   from the `Agent` instance into those options (wired in `createLoopConfig()`).
-4. `compat.streamSimple` picks the adapter: it either delegates to built-in
-   model support (`compatModels.streamSimple`) when the model matches a
-   registered builtin API instance, or looks up the registered API provider by
-   `model.api` and calls that provider's `streamSimple`.
-5. The adapter serializes the normalized context and returns a
-   provider-independent assistant event stream. During that path:
+3. The composed provider selects the adapter for `model.api` and serializes
+   the normalized context. It returns a provider-independent assistant event
+   stream. Agent core also forwards `onPayload` / `onResponse` from the
+   `Agent` instance into those options (wired in `createLoopConfig()`). During
+   that path:
    - `onPayload` becomes extension `before_provider_request` and may replace
      the provider-specific payload after serialization.
    - `onResponse` becomes extension `after_provider_response` and observes HTTP
      status/headers before body consumption when the adapter exposes them.
 
-`ModelRegistry` still owns the catalog, configured provider overrides,
-credential lookup, OAuth state, and header sources used by step 2; its role in
-this stage is auth/header resolution for the chosen model, not model selection.
+`ModelRuntime` is the canonical internal owner of model catalogs, auth, OAuth,
+and composed-provider request preparation. `ModelRegistry` is an
+extension-facing compatibility facade; it is not the coding-agent request-path
+owner. The provider implementations own protocol serialization and streaming.
 
 The sequence below summarizes stages 3-6 for one turn of the running example —
 the first model request after `"Read the config and fix the failing test"`:
@@ -880,8 +875,9 @@ live trace, start at these symbols in order:
    `packages/agent/src/agent.ts`.
 4. `runAgentLoop()`, `streamAssistantResponse()`, and `executeToolCalls()` in\
    `packages/agent/src/agent-loop.ts`.
-5. `streamSimple()` in `packages/ai/src/compat.ts`.
-6. The `streamSimple` function in the selected provider API adapter.
+5. `streamFn` in `packages/coding-agent/src/core/sdk.ts`, which calls
+   `ModelRuntime.streamSimple()`.
+6. The `streamSimple` function in the selected composed provider/API adapter.
 
 Use the extension event timeline in `packages/coding-agent/docs/extensions.md`
 as a second view of the same lifecycle. It documents what extension authors
@@ -894,7 +890,7 @@ can rely on; the source symbols above show which layer makes each guarantee.
 | Input | `sendUserMessage`, `deliverAs: "steer"` or `"followUp"` |
 | Interception | `registerCommand`, `input` event |
 | Turn construction | `before_agent_start`, `sendMessage`, `triggerTurn` |
-| Context boundaries | `context` event, `getSystemPromptOptions()` |
+| Context boundaries | `context` event, command-only `getSystemPromptOptions()` |
 | Provider dispatch | `before_provider_headers`, `before_provider_request`, `after_provider_response`, `registerProvider` |
 | Streaming | `message_start`/`update`/`end`, `turn_start`/`end`, custom UI |
 | Tools | `tool_call`, `tool_result`, `registerTool` |

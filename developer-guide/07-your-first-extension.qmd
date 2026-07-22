@@ -45,7 +45,7 @@ mechanism-choosing guidance. You also need:
   example tool; see [Using Pi day to day](#sec:using-pi)).
 - Basic TypeScript familiarity: functions, `async`/`await`, and imports are
   enough (see [Reading and changing Pi's TypeScript](#sec:typescript)).
-- Optionally, a checkout of the `pi-mono` repository so you can follow the
+- Optionally, a checkout of the `pi` repository so you can follow the
   referenced source files; every file path in this chapter is relative to its
   root.
 
@@ -402,7 +402,7 @@ Work from loading toward the failing behavior:
 2. **Check the code independently.** Run
    `npx tsc --noEmit path/to/extension.ts`. Jiti transpiles TypeScript but does
    not type-check it, so type errors can survive loading and fail later. Note
-   that this only works where the imports resolve: run it inside a `pi-mono`
+   that this only works where the imports resolve: run it inside a `pi`
    checkout or a project that has `@earendil-works/pi-coding-agent` installed.
    On a bare file under `~/.pi/agent/extensions/` there is no `node_modules`
    to resolve against, and `tsc` reports module-resolution errors that say
@@ -411,8 +411,9 @@ Work from loading toward the failing behavior:
    temporary notifications to the relevant hooks in TUI mode, or concise
    logging when testing print mode. Check command names, tool names, schemas,
    and descriptions before debugging a multi-turn interaction.
-4. **Inspect model-facing state.** The built-in `/debug` command writes rendered
-   TUI lines and the latest LLM messages to `~/.pi/agent/pi-debug.log`, which shows
+4. **Inspect model-facing state.** The built-in `/debug` command writes all
+   current `session.messages` (including user, assistant, and tool-result
+   history) plus rendered TUI lines to `~/.pi/agent/pi-debug.log`, which shows
    whether tool definitions and prompt metadata reached the model.
 5. **Exercise lifecycle edges.** Run `/reload`, then test a new session,
    resume, fork, and exit when relevant. Verify `session_shutdown` cleanup and

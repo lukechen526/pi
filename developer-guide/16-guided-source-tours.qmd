@@ -212,17 +212,18 @@ default mode rather than accidentally relying on timing.
 
 **Question:** Where do key, headers, model metadata, and payload come from?
 
-First open `packages/coding-agent/src/core/sdk.ts`. This module is the
-coding-agent bridge from model-registry configuration to the AI package's
-streaming API. In its stream function, trace how it asks the model registry for
-auth, combines environment/header settings, emits `before_provider_headers`,
-and then calls `streamSimple`.
+First open `packages/coding-agent/src/core/sdk.ts`. This module wires the
+coding-agent bridge from model-runtime configuration to the AI package's
+streaming API. In its stream function, trace how `ModelRuntime.streamSimple()`
+prepares auth and headers, emits `before_provider_headers`, and selects the
+composed provider for the model's API.
 
-Follow into `packages/ai/src/compat.ts`. It chooses a built-in model dispatcher
-or resolves the API provider by `model.api`. Open one adapter such as
+Follow into `packages/coding-agent/src/core/model-runtime.ts`, then into the
+composed provider and an adapter such as
 `packages/ai/src/api/openai-completions.ts` or
-`packages/ai/src/api/anthropic-messages.ts` and identify its serialization and
-event-stream parser entry points.
+`packages/ai/src/api/anthropic-messages.ts`; identify its serialization and
+event-stream parser entry points. `packages/ai/src/compat.ts` is a
+compatibility/default fallback, not the primary coding-agent route.
 
 **Outcome:** You can distinguish configuration bugs (registry), protocol bugs
 (adapter), and runtime-loop bugs (agent) without a speculative rewrite.
@@ -246,9 +247,12 @@ leaf backwards,
 then identify which entries become context messages and which are metadata
 only.
 
-Cross-check with `packages/coding-agent/docs/session-format.md`. Use `getBranch`,
-`buildContextEntries`, and `buildSessionContext` from an extension command to
-inspect an actual session instead of parsing JSONL manually at first.
+Cross-check with `packages/coding-agent/docs/session-format.md`. Use `getBranch`
+and `buildContextEntries` from an extension command to inspect an actual
+session instead of parsing JSONL manually at first. The standalone
+`buildSessionContext(entries, leafId?)` helper can also be imported and called
+with `ctx.sessionManager.getEntries()` and `ctx.sessionManager.getLeafId()`;
+it is not an instance method on `ctx.sessionManager`.
 
 **Outcome:** You can prove whether a context difference is persistence policy,
 compaction, branch navigation, or an extension's reconstruction mistake.

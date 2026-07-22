@@ -229,8 +229,9 @@ calls.
 `createAgentSession(options?)` in `packages/coding-agent/src/core/sdk.ts` is the
 composition entry point for a programmatic host. It can create defaults or
 accept caller-provided cwd, agent directory, model, session manager, settings
-manager, model registry, resource loader, scoped models, tool restrictions,
-custom tools, and a session start event.
+manager, `modelRuntime`, resource loader, scoped models, tool restrictions,
+custom tools, and a session start event. `ModelRegistry` is constructed as an
+extension-facing facade over the runtime rather than supplied as an option.
 
 The SDK does several pieces of application policy on purpose:
 
@@ -275,16 +276,19 @@ does **not** re-export TypeBox.
 
 ```ts
 import { Type } from "@earendil-works/pi-ai";
+import { defineTool } from "@earendil-works/pi-coding-agent";
 
-const customTool = {
+const customTool = defineTool({
   name: "lookup",
+  label: "Lookup",
   description: "Look up one application record.",
   parameters: Type.Object({ id: Type.String() }),
-  execute: async (_id, params, signal) => {
+  async execute(_id, params, signal, _onUpdate, _ctx) {
     // validate permissions and forward signal to I/O
+    if (signal?.aborted) throw new Error("Operation aborted");
     return { content: [{ type: "text", text: params.id }] };
   },
-};
+});
 ```
 
 Give real tools a clear source identity, schema, durable details shape, and

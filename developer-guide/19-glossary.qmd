@@ -127,10 +127,11 @@ import from the barrel instead of reaching into internal files. See
 
 : The compatibility API in `packages/ai/src/compat.ts` — `stream()`,
 `streamSimple()`, and the api-registry — that resolves a provider
-implementation from `model.api` and streams a response through it. The
-`Agent` class calls its stream function (`streamFn`, defaulting to
-`streamSimple`) on every model request. See [Architecture](#sec:architecture)
-and [Models, providers, and authentication](#sec:models).
+implementation from `model.api` and streams a response through it. Generic
+`Agent` uses its explicit `streamFn` or the process-wide default stream
+function; coding-agent wires `ModelRuntime.streamSimple()` explicitly. See
+[Architecture](#sec:architecture) and [Models, providers, and
+authentication](#sec:models).
 
 **Extension**
 
@@ -214,8 +215,15 @@ is loaded. See [Models, providers, and authentication](#sec:models).
 
 **Model registry**
 
-: The coding-agent service that resolves models, providers, authentication,
-OAuth, and dynamic provider registration. See [Models and authentication](#sec:models).
+: The extension-facing compatibility facade for model/provider lookup and
+registration. The canonical internal owner of composed catalogs, authentication,
+OAuth, and request preparation is **ModelRuntime**. See [Models and
+authentication](#sec:models).
+
+**ModelRuntime**
+
+: The coding-agent service that owns composed model catalogs, authentication,
+OAuth, and provider request preparation. See [Models and authentication](#sec:models).
 
 **Provider**
 

@@ -136,12 +136,12 @@ terminal UI, an agent runtime, and a provider-neutral AI API.
 
 ### The workspace in brief
 
-The root `package.json` declares npm workspaces for the five packages under
-`packages/*` plus extension examples, and `npm install` links them for imports
-such as `@earendil-works/pi-ai`. Inside the repo, cross-package imports use
-published package names; relative `.ts` imports stay within one package.
-Extensions written outside the repo import the published packages and declare
-them as peer dependencies.
+The root `package.json` declares npm workspaces for the five direct packages
+under `packages/*`, plus nested storage and extension-example workspaces, and
+`npm install` links them for imports such as `@earendil-works/pi-ai`. Inside
+the repo, cross-package imports use published package names; relative `.ts`
+imports stay within one package. Extensions written outside the repo import
+the published packages and declare them as peer dependencies.
 
 [Architecture: packages, ownership, and entry points](#sec:architecture) is the
 authoritative map: what each package owns, the import rules, and the startup
@@ -232,8 +232,9 @@ documentation, and these implementation seams:
   `packages/coding-agent/src/core/sdk.ts` and `src/core/agent-session.ts`.
 - Low-level loop and tool execution: `packages/agent/src/agent.ts`,
   `src/agent-loop.ts`, and `src/types.ts`.
-- Provider dispatch: `packages/ai/src/compat.ts`, `src/models.ts`, and
-  `src/types.ts`.
+- Provider dispatch: `packages/coding-agent/src/core/sdk.ts`,
+  `src/core/model-runtime.ts`, and the composed providers; the compatibility
+  dispatch in `packages/ai/src/compat.ts` is a legacy/default fallback.
 - Extension contract and loading: `packages/coding-agent/src/core/extensions/`
   plus `packages/coding-agent/docs/extensions.md`.
 

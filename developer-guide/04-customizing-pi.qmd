@@ -72,10 +72,14 @@ objects one level deep: project properties replace same-named global
 properties, while other global properties remain. This is a shallow merge at
 the setting's top level, not a recursive merge of nested objects.
 
-Arrays have different semantics. A project array replaces the global array; it
-is never unioned. If the project omits an array, the global array remains in
-the effective settings. This applies to `extensions`, `skills`, `prompts`,
-`themes`, `packages`, and any other array-valued setting.
+Arrays have two related but distinct behaviors. In the merged settings value, a
+project array replaces the global array; omitting the key leaves the global array
+in that effective settings object. Runtime resource and package resolution then
+reads raw global and project sources independently and can combine them. Thus
+an explicit `[]` is not a denylist for globally configured or auto-discovered
+resources. This distinction matters for `extensions`, `skills`, `prompts`,
+`themes`, and `packages`; do not infer runtime loading solely from the merged
+array value.
 
 For example:
 
@@ -90,7 +94,7 @@ For example:
     "~/.pi/agent/extensions/shared.ts",
     "~/.pi/agent/extensions/audit.ts"
   ],
-  "skills": ["~/.pi/agent/skills/review.md"],
+  "skills": ["~/.pi/agent/skills/review/SKILL.md"],
   "themes": ["~/.pi/agent/themes/dark.json"]
 }
 
@@ -103,16 +107,20 @@ For example:
 ```
 
 The effective `compaction` is `{ "enabled": true, "reserveTokens": 8192 }`.
-The effective `extensions` is only `["extensions/project.ts"]` (resolved from
-the project settings directory), and the
-empty project `skills` array deliberately clears the global skill list. Because
-`themes` is omitted from the project file, the global theme array remains. Use
-an omitted array to inherit and an explicit array—including `[]`—to replace.
+The effective settings arrays are `extensions: ["extensions/project.ts"]`
+and `skills: []`; because `themes` is omitted from the project file, the global
+theme array remains. However, runtime resource resolution still considers raw
+global and project resource sources, including global explicit paths and
+auto-discovered resources. Use omission when you want the merged settings value
+to inherit; use an explicit array to replace that value, not to disable global
+resource discovery.
 
 ::: {.callout-warning}
-A project `"extensions": []` (or any explicit array) wipes the global list for
-that setting. To keep global extensions active in a project, restate them in
-the project array or omit the key entirely.
+A project `"extensions": []` (or any explicit array) replaces the effective
+settings array, but it does not disable global explicit or auto-discovered
+extensions during runtime resource resolution. Do not use an empty project
+array as a global-resource denylist; change the global sources or use the
+package/resource filters intended for that scope.
 :::
 
 The one-level merge also has a floor: nested objects inside an object-valued
@@ -148,13 +156,11 @@ semantics and should be considered part of a reproducible project setup.
 
 ### Model and thinking
 
-`defaultProvider`, `defaultModel`, `defaultThinkingLevel`,
-`enabledModels`, and `thinkingBudgets` influence startup selection, model
-cycling, and provider options. (`defaultThinkingLevel` and `thinkingBudgets`
-control the thinking level whose border color you saw in
-[Using Pi day to day](#sec:using-pi).) A saved session model takes precedence
-during a resume if it is still configured and authenticated; defaults are a
-fallback.
+`defaultProvider`, `defaultModel`, `defaultThinkingLevel`, and
+`enabledModels` influence startup selection and model cycling. `thinkingBudgets`
+tunes token budgets and provider options; `defaultThinkingLevel` selects the
+thinking level shown in the UI. A saved session model takes precedence during
+a resume if it is still configured and authenticated; defaults are a fallback.
 
 ```json
 {
@@ -245,7 +251,8 @@ For example, using the review skill authored later in this chapter, you type:
 
 `_expandSkillCommand()` in `src/core/agent-session.ts` replaces the command
 with the skill file's body wrapped in a `<skill>` block, and appends your typed
-text. The model receives:
+text. For readability, the example below shortens paths; runtime `filePath` and
+`baseDir` values are normally absolute. The model receives:
 
 ```text
 <skill name="review" location=".pi/skills/review/SKILL.md">
@@ -371,10 +378,14 @@ Report bugs, security issues, and error-handling gaps.
 Do not modify files; report findings only.
 ```
 
-Save as `.pi/skills/review/SKILL.md` (or `~/.pi/agent/skills/review.md`),
-restart Pi or run `/reload`, and it becomes available as `/skill:review` and in
-system-prompt skill listings. The startup header lists loaded `AGENTS.md`
-files, prompt templates, skills, and extensions, so you can confirm discovery
+Save as `.pi/skills/review/SKILL.md` (or use a directory
+`~/.pi/agent/skills/review/SKILL.md`), restart Pi or run `/reload`, and it
+becomes available as `/skill:review` and in system-prompt skill listings. A
+standalone file directly under `skills/` derives its default name from the
+parent directory (`skills`); to use a file such as
+`~/.pi/agent/skills/review.md`, add `name: review` to its frontmatter. The
+startup header lists loaded `AGENTS.md` files, prompt templates, skills, and
+extensions, so you can confirm discovery
 there.
 
 A **prompt template** is a Markdown file in `~/.pi/agent/prompts/` or
@@ -597,5 +608,7 @@ Close the day-one scenario from the top of this chapter:
    an argument and predict the expanded message the model receives.
 3. With at least one extension in `~/.pi/agent/extensions/`, add
    `"extensions": []` to the project `.pi/settings.json` and predict whether
-   the global extension still loads. Restart `pi` and check the startup
-   header; then remove the key and compare.
+   the global extension still loads. The empty project array replaces the
+   effective setting but does not disable global explicit or auto-discovered
+   resources at runtime. Restart `pi` and check the startup header; then remove
+   the key and compare.

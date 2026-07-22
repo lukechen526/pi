@@ -43,7 +43,7 @@ follow the normal prompt/turn pipeline from submitted text to tool output;
 | Provider status/response headers | `after_provider_response` | HTTP metadata before stream consumption |
 | Validated tool arguments | `tool_call` | Tool name and mutable input |
 | Streaming/final tool execution row | `tool_execution_start` / `_update` / `_end` | Observation-only lifecycle payloads |
-| Tool execution output (patchable) | `tool_result` | Content/details/`isError` patch opportunity |
+| Tool execution output (patchable) | `tool_result` | Content/details/`isError`/`usage` patch opportunity |
 | Final tool transcript message | `message_start` / `message_end` with `role: "toolResult"` | Durable tool-result message after patching |
 | User typed `!` command | `user_bash` | User command and context-exclusion choice |
 | Cancel or customize compaction | `session_before_compact` | Prep metadata; may cancel or supply summary |
@@ -61,10 +61,10 @@ their operation rebuilds the active context.
 
 `user_bash` is the direct-user shell path for commands beginning with `!`. It is
 not the model `bash` tool path. A handler receives the command and context and
-can observe, block, or choose whether output enters model context according to
-the documented event return shape. Test this path separately from
-`tool_call`/`tool_result`; a sandbox that covers only model tools does not cover
-commands typed directly by a user.
+can provide custom operations or a complete result. Its return shape has only
+`operations?` and `result?`; it has no `block` field or context-inclusion toggle.
+Test this path separately from `tool_call`/`tool_result`; a sandbox that covers
+only model tools does not cover commands typed directly by a user.
 
 ## Startup and trust events
 
@@ -299,20 +299,23 @@ The tool execution path separates observation, policy, and patching:
 | `tool_execution_start` | Observation: tool is about to run | Read `toolCallId`, `toolName`, `args` |
 | `tool_call` | Policy gate after validation | Mutate `event.input` in place, or return `{ block: true, reason? }` |
 | `tool_execution_update` | Observation: partial/streaming output | Read `partialResult` |
-| `tool_result` | Result-patching middleware | Return partial `{ content?, details?, isError? }` |
+| `tool_result` | Result-patching middleware | Return partial `{ content?, details?, isError?, usage? }` |
 | `tool_execution_end` | Observation: finalized execute result | Read `result` and `isError` |
 
 `tool_execution_*` handlers are observation-only: they do not cancel execution
 or rewrite output. Keep the spelling and layer distinction exact:
 `tool_result` (snake case) is an extension event, while `toolResult` (camel
 case) is a message role. The `tool_result` hook can patch the result before it
-is committed (`content`, `details`, and/or `isError`; omitted fields keep their
-current values). A `toolResult` message is the durable transcript entry
-(`role: "toolResult"`) that appears later as `message_start`/`message_end` and
-in the session file. A hook can therefore affect the message that follows, but
-it is not itself that message.
+is committed (`content`, `details`, `isError`, and/or `usage`; omitted fields
+keep their current values). A `toolResult` message is the durable transcript
+entry (`role: "toolResult"`) that appears later as `message_start`/`message_end`
+and in the session file. A hook can therefore affect the message that follows,
+but it is not itself that message.
 
-The default parallel execution order is subtle:
+Not every tool-call outcome reaches `tool_result`: unknown tools, argument
+validation failures, blocked calls, and early abort/length paths can produce a
+direct error result during preflight and bypass the post-execution hook. For
+calls that do execute, the default parallel execution order is subtle:
 
 ```text
 source-order tool_execution_start and tool_call preflight

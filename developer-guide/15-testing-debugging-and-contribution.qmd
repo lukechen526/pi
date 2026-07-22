@@ -250,8 +250,9 @@ detached session in cleanup.
 ## `/debug` and diagnostic data
 
 In interactive mode, type `/debug` as a built-in slash command. It writes `~/.pi/agent/pi-debug.log` with rendered TUI
-lines containing ANSI codes and the last messages sent to the LLM. Comparing
-those two views can reveal whether a mismatch arose before or during rendering.
+lines containing ANSI codes and all current `session.messages` sent to the LLM,
+including user, assistant, and tool-result history. Comparing those two views
+can reveal whether a mismatch arose before or during rendering.
 The log may contain sensitive prompts, file contents, and tool results, so
 review and redact it before sharing any excerpt publicly.
 
