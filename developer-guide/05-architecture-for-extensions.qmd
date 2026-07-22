@@ -45,14 +45,14 @@ chapter](#sec:how-to-read) and come back later.
 
 **The default tool set is four tools.** A fresh session activates only
 `read`, `bash`, `edit`, and `write`
-(`defaultActiveToolNames` in `agent-session.ts`). Three more definitions —
+(`defaultActiveToolNames` in `core/sdk.ts`). Three more definitions —
 `grep`, `find`, and `ls` — ship but stay inactive until selected with
 `--tools`, an extension's `pi.setActiveTools()`, or a setting. The reasoning:
 a model with `bash` can already run `rg`, `find`, and `ls` itself, so Pi does
 not spend context-window budget on dedicated tools for what the shell does.
 [Built-in tools](#sec:tools) covers the full registry and selection mechanics.
 
-**The base system prompt is about 15 lines.** `buildSystemPrompt()` in
+**The base system prompt is intentionally compact.** `buildSystemPrompt()` in
 `core/system-prompt.ts` assembles a fixed base, then appends per-session
 context on top:
 
@@ -96,6 +96,9 @@ are `--append-system-prompt` text, `AGENTS.md` context files wrapped in a
 separate from Pi's own instructions), skills, and a final cwd line;
 [Customizing Pi](#sec:resources) covers those inputs. A `--system-prompt`
 replacement swaps the base out entirely while keeping the appended parts.
+For the complete model-facing assembly—why tool schemas, tool guidance, and tool
+results are separate—and the rule that continues or ends a run, read
+[The agent loop in one picture](06-lifecycle-and-hooks.qmd#the-agent-loop-in-one-picture).
 
 **What Pi deliberately does not build in** (see the philosophy section of
 `packages/coding-agent/README.md`):
@@ -356,6 +359,9 @@ flowchart TD
   Q -->|"yes"| P
   Q -->|"no"| DONE["run ends"]
 ```
+
+For the corresponding coding-agent assembly path and the distinction between a
+low-level run ending and a session settling, see [The agent loop in one picture](06-lifecycle-and-hooks.qmd#the-agent-loop-in-one-picture).
 
 The generic loop deliberately receives callbacks such as `convertToLlm`,
 `transformContext`, `beforeToolCall`, and `afterToolCall` instead of

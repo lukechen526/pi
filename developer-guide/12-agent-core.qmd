@@ -12,6 +12,9 @@ project trust, extensions, or built-in filesystem tools.
 The central source files are `packages/agent/src/agent.ts`,
 `src/agent-loop.ts`, and `src/types.ts`.
 
+For the coding-agent view of prompt/tool assembly and the high-level rule that
+continues or ends a run, start with [The agent loop in one picture](06-lifecycle-and-hooks.qmd#the-agent-loop-in-one-picture). This chapter supplies the implementation-level event, queue, snapshot, and concurrency detail behind that model.
+
 ## The smallest useful mental model
 
 An **agent run** repeats this cycle: send context to a model, receive streamed

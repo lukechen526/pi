@@ -38,6 +38,219 @@ usually creates one model turn, while `"Read the config and fix the failing
 test"` can create several turns because the model may call `read`, then `bash`,
 then answer. The path below explains what stays the same in both examples.
 
+## The agent loop in one picture
+
+**In plain terms:** Pi repeatedly gives a model three things—the assembled
+system prompt, the conversation so far, and the active tool schemas. The model
+then either answers or requests tools. Tool results become part of the
+conversation for the next request. A run ends only when there are no tool calls
+that require a model follow-up and no queued user messages.
+
+```{mermaid}
+%%| label: fig-agent-loop-mental-model
+%%| fig-cap: "The model-facing loop. Tool schemas and tool guidance have different roles: schemas are sent in Context; guidance helps construct the system prompt."
+flowchart TD
+  R["Resources:<br/>context files, skills, prompt options"] --> A["Assemble system prompt"]
+  T["Active tool definitions:<br/>schemas, snippets, guidelines"] --> A
+  T --> C
+  M["Conversation messages"] --> C
+  A --> C["Context:<br/>systemPrompt + messages + tools"]
+  C --> P["Stream one assistant response"]
+  P --> Q{"Tool calls?"}
+  Q -->|"yes"| X["Validate, gate, execute,<br/>and append tool results"]
+  X --> N{"All results<br/>terminate?"}
+  N -->|"no"| C
+  N -->|"yes"| U
+  Q -->|"no"| U{"Queued message?"}
+  U -->|"steering or follow-up"| C
+  U -->|"none"| E["agent_end"]
+  classDef assembly fill:#dbe7f5,stroke:#2f5b8f,color:#000000
+  classDef loop fill:#fde2c4,stroke:#a05a00,color:#000000
+  classDef end fill:#e9e9e9,stroke:#666666,color:#000000
+  class A,C assembly
+  class P,Q,X,N,U loop
+  class E end
+```
+
+A **run** begins with `agent_start` and can contain several **turns**. A turn
+is one provider response plus the tool batch it produces. `agent_end` means the
+low-level loop stopped; `agent_settled` means that the coding-agent session has
+also finished any retry, compaction-and-retry, or queued continuation work.
+
+The loop has one important boundary: Pi's richer session messages are not sent
+directly to a provider. Before every provider request, Pi can transform the
+rich message list, then converts it to provider-compatible messages. The final
+provider-facing `Context` contains exactly:
+
+```ts
+const context = {
+  systemPrompt, // One assembled instruction string.
+  messages, // Provider-compatible conversation messages.
+  tools, // Active tool names, descriptions, and parameter schemas.
+};
+```
+
+### How Pi builds the model context
+
+This section answers one question: **what can the model see on its next
+request?** The answer is not “everything Pi loaded or stored.” Every
+model-visible value must become one of the three `Context` fields above. The
+assembly has three timings:
+
+```{mermaid}
+%%| label: fig-model-context-assembly
+%%| fig-cap: "Model-context assembly. Resource discovery and input expansion happen before a run; messages are transformed and converted before every provider request."
+flowchart LR
+  subgraph START["Startup or reload"]
+    R["Context files, skills,<br/>prompt options, extensions"]
+    T["Built-in and extension<br/>tool definitions"]
+  end
+  subgraph INPUT["Submitted prompt"]
+    I["Skill command or<br/>prompt-template expansion"]
+    U["User and extension<br/>messages"]
+  end
+  R --> SP["Assemble<br/>system prompt"]
+  T --> SP
+  T --> AT["Select active tools"]
+  I --> U
+  U --> M["Rich AgentMessage[]"]
+  SP --> C["Provider Context"]
+  AT --> C
+  M --> X["context event"] --> L["convertToLlm()"] --> C
+  C --> P["Provider request"]
+  classDef source fill:#dbe7f5,stroke:#2f5b8f,color:#000000
+  classDef boundary fill:#fde2c4,stroke:#a05a00,color:#000000
+  classDef output fill:#d7ecd7,stroke:#2e6b2e,color:#000000
+  class R,T,I,U source
+  class SP,AT,X,L boundary
+  class C,P output
+```
+
+#### Model-visibility inventory
+
+| Input | How Pi discovers or creates it | Model route | When it is visible |
+|---|---|---|---|
+| Pi default instructions, custom prompt, appended prompt, cwd | CLI options and `buildSystemPrompt()` | `systemPrompt` | Every request after assembly or refresh |
+| `AGENTS.md` and other context files | Context-file discovery | Appended to `systemPrompt` | Every request |
+| Available skills | Resource loader discovers configured/global/project skill files | A skill catalog—name, description, and location—inside `systemPrompt` | Every request when `read` is active, except skills marked `disable-model-invocation` |
+| `/skill:name` invocation | Input expansion before a run | Full skill body plus typed arguments in the user message | The submitted message and later conversation history |
+| Prompt template invocation | Input expansion before a run | Expanded text in the user message | The submitted message and later conversation history |
+| Active built-in and extension tools | Tool registry and active-tool selection | Name, description, and parameter schema in `Context.tools`; optional guidance in `systemPrompt` | Every request after activation or refresh |
+| Assistant text, tool calls, and tool results | Provider stream and tool execution | Converted assistant and `toolResult` messages | Later requests in the same active context |
+| Extension custom messages | `before_agent_start`, `sendMessage`, or queued delivery | Converted message, if its type is model-visible | At its configured delivery point |
+| Durable custom entries and renderers | `appendEntry()` and UI registration | No route by default | Never, unless an extension also sends a message |
+| MCP connection/configuration | Pi has no built-in MCP subsystem | No route by default | Never, unless an extension exposes model-visible tools or messages |
+
+#### System prompt: instructions and skill discovery
+
+`AgentSession._rebuildSystemPrompt()` builds structured
+`BuildSystemPromptOptions` and passes them to `buildSystemPrompt()`. In the
+default-prompt path, it combines:
+
+```text
+Pi default base
++ --append-system-prompt text
++ discovered AGENTS.md/context files
++ available-skill catalog
++ active tools' prompt snippets and promptGuidelines
++ current working directory
+= system-prompt string
+```
+
+A discovered skill is not copied wholesale into every request. Instead,
+`formatSkillsForPrompt()` adds an `<available_skills>` entry containing its
+name, description, and file location, plus instructions to use `read` when a
+task matches. This is how the model discovers a skill. Skills with
+`disable-model-invocation: true` are omitted from that catalog and can only be
+invoked explicitly. The catalog is included only when `read` is active because
+Pi's instruction tells the model to load the skill file with that tool.
+
+An explicit `/skill:name arguments` follows a different path: before an agent
+run starts, Pi reads the skill file and expands its full body, location, and the
+user's arguments into the user message. Prompt templates likewise expand into
+user-message text. These are message inputs, not system-prompt or tool-schema
+inputs. [Customizing Pi](#sec:resources) documents discovery locations and
+input expansion rules.
+
+A custom `--system-prompt` replaces Pi's default base rather than extending it.
+Pi still appends `--append-system-prompt`, context files, the current working
+directory, and the available-skill catalog when `read` is active. The default
+base, by contrast, includes the active tools' snippets and prompt guidelines.
+This is why a replacement prompt must provide any tool-use instructions it
+still needs.
+
+#### Tools and MCP-backed capabilities
+
+The current active tools are assembled beside the system-prompt string, not
+inside it. One tool has three related but distinct model-facing
+representations:
+
+| Representation | Purpose | Where it goes |
+|---|---|---|
+| Tool definition | Name, description, TypeBox parameter schema, and `execute` function | Active `AgentTool` registry; its provider-compatible schema enters `Context.tools` |
+| Prompt snippet and `promptGuidelines` | Prose that helps the model choose and use a tool | The default assembled system prompt |
+| Tool result | Output, details, error state, and optional `terminate` hint | A `toolResult` conversation message after execution |
+
+Pi initially activates `read`, `bash`, `edit`, and `write`; other built-in,
+custom, and extension tools may be registered without being active. Activating a
+tool is therefore a real model-policy change: it makes that tool schema
+available in the next `Context` and rebuilds the system prompt with its
+available prompt metadata. See [Built-in tools](#sec:tools) for the registry
+and [Agent core](#sec:agent-core) for the generic contracts.
+
+Pi does not provide MCP integration as a built-in subsystem. An MCP extension
+or another bridge can connect to an MCP server, but that connection is
+model-invisible by itself. The model sees an MCP-backed capability only when
+the integration registers and activates a Pi tool, or deliberately injects a
+model-visible message. Connection state, credentials, cached data, and UI-only
+rendering remain local unless the extension explicitly converts them into one
+of those `Context` fields.
+
+### The continuation rule in simplified code
+
+The actual implementation emits events, supports parallel tools, and refreshes
+next-turn state. Its control flow can be read as this deliberately simplified
+version:
+
+```ts
+while (true) {
+  const response = await streamModel(context);
+  if (response.stopReason === "error" || response.stopReason === "aborted") break;
+
+  const calls = response.toolCalls;
+  const results = await validateGateAndExecute(calls);
+  context.messages.push(response, ...results);
+
+  if (calls.length > 0 && !results.every((result) => result.terminate)) continue;
+
+  const steering = takeSteeringMessages();
+  if (steering.length > 0) {
+    context.messages.push(...steering);
+    continue;
+  }
+
+  const followUp = takeFollowUpMessages();
+  if (followUp.length > 0) {
+    context.messages.push(...followUp);
+    continue;
+  }
+
+  break;
+}
+```
+
+This sketch preserves the rules that matter most: a failed tool becomes an
+error result the model can inspect, rather than ending the run; one terminating
+tool does not stop a batch unless **every** finalized result terminates; and
+steering is checked before follow-up. The real loop also calls
+`prepareNextTurn` after each turn. Coding-agent uses that refresh point so a
+later request can see changed active tools, a rebuilt system prompt, model, or
+thinking level without changing the request already in progress. An embedding
+can also supply `shouldStopAfterTurn`; when it returns true, the generic loop
+ends before it polls steering or follow-up queues. Coding-agent's normal
+continuation behavior instead uses the queue rules shown above and its
+session-level recovery policy.
+
 ## The complete path
 
 **In plain terms:** your text travels from the editor, through interception and
@@ -49,19 +262,19 @@ the model calls `read`, then `bash`, then answers.
 
 ```{mermaid}
 %%| label: fig-prompt-lifecycle-overview
-%%| fig-cap: "The complete interactive prompt path. Stages 1-2 (blue) happen before any model work; stages 6-8 (amber) repeat once per turn; stages 9-10 (grey) settle the run."
+%%| fig-cap: "The complete interactive prompt path. Prompt and tool assembly precede the repeated provider/tool cycle; persistence and session settlement happen after the low-level loop ends."
 flowchart TD
-  S1["1-2. Input and interception"]:::input
-  S3["3. Turn construction"]:::turn
-  S45["4-5. Context and dispatch"]:::turn
-  S6["6. Streaming events"]:::turn
-  S7["7. Tool execution"]:::turn
-  S8{"8. Another turn?"}
-  S9["9-10. Persistence<br/>and settlement"]:::settle
-  S1 --> S3 --> S45 --> S6 --> S7 --> S8
-  S8 -->|"yes"| S45
+  S1["1-3. Input, interception,<br/>and run construction"]:::input
+  S4["4. Assemble prompt,<br/>messages, and active tools"]:::assembly
+  S56["5-6. Provider Context<br/>and streaming response"]:::turn
+  S7["7. Validate and execute tools"]:::turn
+  S8{"8. Continue this run?"}
+  S9["9-10. Persistence,<br/>recovery, and settlement"]:::settle
+  S1 --> S4 --> S56 --> S7 --> S8
+  S8 -->|"yes"| S4
   S8 -->|"no"| S9
   classDef input fill:#dbe7f5,stroke:#2f5b8f,color:#000000
+  classDef assembly fill:#d7ecd7,stroke:#2e6b2e,color:#000000
   classDef turn fill:#fde2c4,stroke:#a05a00,color:#000000
   classDef settle fill:#e9e9e9,stroke:#666666,color:#000000
 ```
@@ -235,7 +448,9 @@ add messages or override the system prompt before the loop takes over;
 
 **In plain terms:** Pi builds a system prompt for the model, lets extensions
 adjust the message list, and then converts the result into the exact format the
-provider API expects.
+provider API expects. [The agent loop in one picture](#the-agent-loop-in-one-picture)
+shows how this assembly relates to tool schemas, tool guidance, and continuation;
+this stage identifies the extension and provider boundaries in that same path.
 
 ```{mermaid}
 %%| label: fig-context-boundaries
@@ -523,11 +738,13 @@ the model calls `bash` to run the test; when the model finally answers with
 plain text, this is where the run decides to stop.
 
 Each final tool result is appended to the in-memory agent context and becomes
-the model-facing material for the next turn. If at least one tool call was
-executed and the batch was not explicitly terminating, the loop starts another
-assistant response. If the model instead returns ordinary final text, the loop
-checks steering messages first and follow-up messages when it would otherwise
-stop:
+the model-facing material for the next turn. This includes schema failures,
+blocked calls, and thrown tool errors: they become error `toolResult` messages
+so the model can correct or explain the failure. If an assistant response
+contains tool calls and their batch is not explicitly terminating, the loop
+starts another assistant response. If the model instead returns ordinary final
+text, the loop checks steering messages first and follow-up messages when it
+would otherwise stop:
 
 ```{mermaid}
 %%| label: fig-next-action

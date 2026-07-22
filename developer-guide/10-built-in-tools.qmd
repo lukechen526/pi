@@ -78,7 +78,11 @@ Tool descriptions and prompt metadata directly shape model behavior.
 definition. When rebuilding the system prompt, Pi includes the snippets and
 `promptGuidelines` from active tools. For example, `read` tells the model to
 inspect files with `read` rather than `cat` or `sed`; `write` reserves full-file
-output for new files or complete rewrites.
+output for new files or complete rewrites. This prose is separate from the
+tool's parameter schema: the schema is sent in the provider `Context.tools`
+field, while snippets and guidelines become system-prompt text. See [The agent
+loop in one picture](06-lifecycle-and-hooks.qmd#the-agent-loop-in-one-picture)
+for the complete assembly and continuation path.
 
 ## Output limits protect the next provider turn
 
