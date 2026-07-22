@@ -186,7 +186,8 @@ factories similarly receive `theme`, and `ctx.ui.theme` exposes the current
 coding-agent theme for code that needs to style outside a renderer. The context
 passed to those renderers includes current args, a row-local mutable state
 object, optional last component, partial/final flags, expanded state,
-show-images preference, cwd, timing, and an `invalidate()` method.
+show-images preference, cwd, and `executionStarted: boolean`, plus an
+`invalidate()` method. It does not expose elapsed execution time.
 
 This produces a useful layering:
 
@@ -243,10 +244,9 @@ Then add focus, keybindings, and a `done(value)` result:
 const answer = await ctx.ui.custom<boolean>((_tui, _theme, keybindings, done) => {
   // Text(text, paddingX, paddingY): cell padding left/right then top/bottom
   const component = new Text("Enter confirms; Escape cancels", 1, 1);
-  component.onKey = (key) => {
-    if (keybindings.matches(key, "tui.select.confirm")) done(true);
-    if (keybindings.matches(key, "tui.select.cancel")) done(false);
-    return true;
+  component.handleInput = (data) => {
+    if (keybindings.matches(data, "tui.select.confirm")) done(true);
+    if (keybindings.matches(data, "tui.select.cancel")) done(false);
   };
   return component;
 });
@@ -349,7 +349,8 @@ When an interactive feature is wrong, isolate its layer:
 4. Confirm the component invalidates after its state changes.
 5. Test narrow terminal widths and long/CJK/ANSI-rich content.
 6. Test focus and cancel paths for custom UI.
-7. Use `/debug` for rendered TUI lines and the last model messages.
+7. Use `/debug` for rendered TUI lines and all current session messages sent
+   through the model-facing history dump.
 
 The correct fix is usually at the narrowest layer that owns the defect: a tool
 renderer for tool presentation, interactive mode for chat composition, or the

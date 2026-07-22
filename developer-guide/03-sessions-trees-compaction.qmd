@@ -3,9 +3,9 @@
 In plain terms: a session is Pi's durable record of a conversation. It survives
 restarts, supports `/resume` and `/new`, and keeps branches when you explore an
 earlier point with `/tree` (move within one session file), `/fork` (continue
-from an earlier message in a new file), or `/clone` (duplicate the session at
-the current position). When context fills, Pi can compact older work into a
-summary instead of discarding the session.
+from an earlier message in a new file), or `/clone` (copy the current active
+root-to-leaf path into a new file). When context fills, Pi can compact older
+work into a summary instead of discarding the session.
 
 This chapter first explains those user-visible behaviors. The final sections
 map them to `ctx.sessionManager`, `appendEntry`, and `session_*` events for
@@ -219,7 +219,7 @@ ends up:
 | `/new` | Creates a new file | Starts empty | Starts a fresh conversation |
 | `/tree` | Same file | Moves to a selected entry | Switches branches within one session |
 | `/fork` | Creates a new file | Starts at the chosen earlier user message | Copies the root-to-message path into a new session |
-| `/clone` | Creates a new file | Same position as the current leaf | Duplicates the current session at the current position |
+| `/clone` | Creates a new file | Same position as the current leaf | Copies the current active root-to-leaf path into a new session |
 
 ### Try it: watch a branch appear on disk
 
@@ -308,7 +308,7 @@ depends on their type:
 |---|---|---|
 | Scalar | Project value replaces the global one | Project `"defaultModel"` wins outright |
 | Object | Merged at the top level only; nested objects are replaced, not recursively merged | Project can set `compaction.reserveTokens` while keeping the global `compaction.keepRecentTokens`, but a nested object field would be replaced whole |
-| Array | Project value replaces the global one; never combined | Project `"packages"` list does not extend the global list |
+| Array | Effective settings value is replaced by the project value; runtime resource/package resolution may still combine raw global and project sources | The effective `"packages"` setting is replaced, while package/resource loading can still consider global and project sources |
 
 Override the session directory with:
 
@@ -568,12 +568,16 @@ groupings:
 | Append transcript (instance) | `appendMessage`, `appendModelChange`, `appendThinkingLevelChange` |
 | Append summaries/state (instance) | `appendCompaction`, `appendCustomEntry`, `appendCustomMessageEntry`, `appendLabelChange`, `appendSessionInfo` |
 | Navigate tree (instance) | `getLeafId`, `getBranch`, `getTree`, `getChildren`, `branch`, `resetLeaf`, `branchWithSummary` |
-| Build context (instance) | `buildContextEntries`, `buildSessionContext` |
+| Build context | `buildContextEntries()` on the manager; standalone `buildSessionContext(entries, leafId?)` helper |
 | Inspect metadata (instance) | `getHeader`, `getSessionName`, `getCwd`, `getSessionFile`, `isPersisted` |
 
 The manager owns the JSONL representation. Do not have an extension write a
 second, unrelated copy of the session file: it will not participate in branch
 or compaction semantics and may become inconsistent with the transcript.
+
+`buildContextEntries()` is available on `ctx.sessionManager`. The richer
+`buildSessionContext()` helper is standalone: import it and pass the manager's
+entries and leaf ID, or use the exposed manager methods to assemble the pieces.
 
 ## Building context from a selected leaf
 
@@ -602,10 +606,8 @@ Pi substitutes the summary for the older span and keeps entries beginning at
 [`firstKeptEntryId`](#sec:split-turns). This field stores the ID of the first
 retained entry, not an array index: the context builder follows the active
 parent chain, inserts the compaction summary, then retains that entry and the
-later entries on the chain. Newer compaction entries can also materialize that
-retained tail directly so Pi can rebuild from the checkpoint; this is an
-on-disk optimization, not a different model-context concept. Replaced records
-remain in JSONL for history but are not sent to the LLM.
+later entries on the chain. Replaced records remain in JSONL for history but
+are not sent to the LLM.
 
 `buildSessionContext()` also scans the full path to restore the current model
 and [thinking level](#sec:glossary), then converts selected entries to

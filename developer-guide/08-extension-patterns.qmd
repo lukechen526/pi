@@ -33,7 +33,7 @@ Finish [Your first extension](#sec:extensions) first — this chapter assumes
 you can write and load a one-file extension with `pi -e path/to/extension.ts`,
 and that you know what a [hook](#sec:glossary), a session, and a slash
 command are. The snippets reference real repository source files; a checkout
-of the `pi-mono` repository lets you follow them, but is not required.
+of the `pi` repository lets you follow them, but is not required.
 
 ## Start with the decision, not the API
 

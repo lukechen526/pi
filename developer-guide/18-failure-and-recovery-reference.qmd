@@ -62,7 +62,7 @@ result data.
 |---|---|---|---|
 | Malformed `settings.json` (global `~/.pi/agent/settings.json` or project `.pi/settings.json`) or `models.json` | Settings/model registry | Diagnostic/load error; built-ins remain available where possible | Correct JSON; inspect reported scope/path |
 | Project extension unavailable | Trust/resource loader | Project resources ignored when untrusted | Save/override trust intentionally, then restart/reload |
-| Extension factory fails | Resource loader/application | Startup diagnostics; Pi suggests retry without extensions | Run with `--no-extensions`/`-ne` (or load a single path via `--extension`/`-e`) to isolate path/import failure |
+| Extension factory fails | Resource loader/application | Startup diagnostics; Pi suggests retry without extensions | Run with `pi -ne -e <path>` to disable discovery while loading one explicit extension; `-e` alone adds a path but does not disable discovery |
 | No model selected | Session setup | Prompt is rejected before agent loop | Configure/choose model and auth |
 | Auth missing | Model registry/session | Prompt is rejected with provider guidance | `/login`, configure key, or select authenticated model |
 
@@ -102,14 +102,17 @@ Tool processing has several failure points:
 | `tool_call` policy denies/blocks the call | Error result with the deny/block reason |
 | Tool execute throws | Error result with thrown error text |
 | Abort occurs before/during work | Error result indicating cancellation |
-| `tool_result` hook throws | Error result rather than a malformed patched result |
+| `tool_result` hook throws | Diagnostic; original unpatched result is preserved |
 
 The loop emits a durable `toolResult` message after execution and the
-`tool_result` extension hook finishes (successful or error-path finalization).
-These are different: `tool_result` is the patchable extension event, while
-`toolResult` is the transcript message role that the model receives. See the
-[extension event reference](#sec:events) for ordering and payloads. A model can
-inspect the resulting message, modify its arguments, call another tool, or
+`tool_result` extension hook finishes. If a coding-agent `tool_result` handler
+throws, the runner catches the hook error, emits a diagnostic, and preserves
+the original unpatched result; it does not turn that hook failure into an error
+result. Only an escaping lower-level `afterToolCall` failure becomes an error
+result. These are different: `tool_result` is the patchable extension event,
+while `toolResult` is the transcript message role that the model receives. See
+the [extension event reference](#sec:events) for ordering and payloads. A model
+can inspect the resulting message, modify its arguments, call another tool, or
 explain the failure.
 Make tool error strings actionable: include an invalid path, missing exact
 text, exit code, timeout, or next command when safe. Do not put credentials
@@ -140,9 +143,10 @@ verbatim after compaction; entries before it are represented by the summary.
 The event payloads and cancellation/custom-summary return shape are indexed in
 the [extension event reference](#sec:events). A custom compaction extension
 that intercepts `session_before_compact` must return a
-`SessionBeforeCompactResult`. To replace the summary, set `compaction` to a
-`CompactionResult` shaped as
-`{ summary, firstKeptEntryId, tokensBefore, details? }`. To abort compaction,
+`SessionBeforeCompactResult`. To replace the summary, set `compaction` to an
+abbreviated `CompactionResult` shaped as
+`{ summary, firstKeptEntryId, tokensBefore, estimatedTokensAfter?, usage?, details? }`;
+`estimatedTokensAfter`, `usage`, and `details` are optional. To abort compaction,
 return `{ cancel: true }`. To keep the default summary from
 `prepareCompaction`/`compact`, omit `compaction`. Changing or omitting the
 `firstKeptEntryId` boundary can make context rebuilding retain the wrong

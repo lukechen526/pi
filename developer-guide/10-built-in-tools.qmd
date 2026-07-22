@@ -113,7 +113,7 @@ For text files, `read` splits lines, applies the requested range, and then
 applies shared truncation. The continuation messages are deliberately specific:
 
 ```text
-Showing lines 1-2000 of 6500. Use offset=2001 to continue.
+[Showing lines 1-2000 of 6500. Use offset=2001 to continue.]
 ```
 
 If a single first line exceeds the byte limit, the `read` result reports that
@@ -167,9 +167,10 @@ next writer starts from settled filesystem state.
 ## `edit`: exact replacement and queued mutation
 
 `edit.ts` is for targeted changes to an existing file. Its schema is built
-around a path and edit blocks with exact old/new text. The exact-match approach
-lets Pi detect ambiguous or stale replacements rather than applying a fuzzy
-patch to the wrong location.
+around a path and edit blocks with exact old/new text. The edit first tries an
+exact match, then a constrained Unicode/whitespace normalization fallback. It
+detects ambiguous or stale replacements rather than applying an approximate
+structural patch to the wrong location.
 
 Like `write`, `edit` resolves the target and wraps the full read-modify-write
 window in `withFileMutationQueue`. If a custom read-modify-write tool queues
@@ -196,9 +197,12 @@ The tool can apply a configured `shellCommandPrefix` and an extension-provided
 customization and routing hooks, not security boundaries. For enforced
 containment, provide `BashOperations` whose `exec` implementation enters the
 sandbox or remote environment, and replace the filesystem tools' operations so
-`read`, `write`, `edit`, `grep`, `find`, and `ls` use the same boundary. Apply
-the boundary to `user_bash` as well. A `tool_call` hook can add policy checks,
-but operating-system or container controls must enforce isolation.
+`read`, `write`, `edit`, `find`, and `ls` use the same boundary. `GrepOperations`
+only replaces grep's path checks and context-file reads; the actual search still
+spawns the local `rg` executable, so it is not by itself a remote/sandbox
+search boundary. Apply the boundary to `user_bash` as well. A `tool_call` hook
+can add policy checks, but operating-system or container controls must enforce
+isolation.
 
 ### Streaming output
 
@@ -217,8 +221,9 @@ exit status along with the error instead of only an exception string.
 
 ## `grep`, `find`, and `ls`: bounded repository discovery
 
-These search/listing tools use the cwd and respect ignore policy. Their
-schemas make the intended scope explicit:
+`grep` and `find` use the cwd and apply their search ignore behavior. `ls`
+directly reads directory entries and includes dotfiles; it does not apply
+`.gitignore` filtering. Their schemas make the intended scope explicit:
 
 | Tool | Important inputs | Default limit | Result shape |
 | --- | --- | ---: | --- |
@@ -241,23 +246,27 @@ built-ins resolve relative paths against the session cwd, not an arbitrary
 process cwd, and format paths for display relative to the session when useful.
 
 Remote execution can preserve structured tool calls. The exported operations
-interfaces make each tool's I/O replaceable:
+interfaces make most tool I/O replaceable; `GrepOperations` is only a partial
+boundary because search itself remains local:
 
 ```text
 ReadOperations    readFile + access + optional MIME (media type) detection
 WriteOperations   mkdir + writeFile
 EditOperations    readFile + writeFile + access
-BashOperations    exec(command, cwd, env, signal, timeout, onData)
-Grep/Find/Ls      operation interfaces for filesystem/search behavior
+BashOperations    exec(command, cwd, { onData, signal, timeout, env })
+GrepOperations    isDirectory + readFile (search still uses local rg)
+Find/Ls           operation interfaces for filesystem behavior
 ```
 
-Each line names the boundary an extension replaces: file tools receive focused
-filesystem methods, while `bash` receives an execution method with streaming
-and cancellation inputs.
+The file-operation lines name focused filesystem methods, while `bash` receives
+an execution method with streaming and cancellation inputs. For grep, only
+path checks and context reads are replaceable; the search process still runs the
+local `rg` executable.
 
-An extension can create a tool with remote operations, register it under the
-same name, and preserve Pi's validation and rendering behavior. The extension
-documentation's SSH and sandbox examples demonstrate this pattern.
+An extension can create a tool with remote operations where the interface covers
+the full operation, register it under the same name, and preserve Pi's
+validation and rendering behavior. Do not treat `GrepOperations` alone as a
+remote search or sandbox boundary.
 
 ## User shell commands are separate from model `bash`
 
@@ -285,8 +294,9 @@ both paths by supplying sandboxed operations for built-in tools and
 
 Built-in definitions include `renderCall` and `renderResult` functions. The
 interactive tool row receives current arguments, partial/final state, expanded
-flag, prior component, execution time, and an `invalidate()` callback. Those
-inputs support syntax-highlighted read/write previews, compact default
+flag, prior component, `executionStarted: boolean`, and an `invalidate()`
+callback. It does not expose elapsed execution time. Those inputs support
+syntax-highlighted read/write previews, compact default
 rendering with an expand hint, streamed shell output, and error-specific
 presentation.
 

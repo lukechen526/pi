@@ -70,10 +70,11 @@ For a reusable package, declare explicit resources under the `pi` key in
 The dependency fields follow three rules:
 
 - **Third-party runtime packages** (anything your code imports that is not Pi
-  itself) belong in `dependencies`, not `devDependencies`. When Pi installs a
-  package from npm or git, it runs `npm install` with development dependencies
-  omitted, so a package that only declares `devDependencies` breaks at load
-  time.
+  itself) belong in `dependencies`, not `devDependencies`. The default npm/git
+  checkout path uses `npm install --omit=dev`, so a package that only declares
+  `devDependencies` breaks at load time; a configured custom `npmCommand` can
+  change the install behavior, but it does not make runtime imports belong in
+  `devDependencies`.
 - **Core Pi packages are supplied by the host Pi install.** List each one your
   code actually imports as a `peerDependency` with a `"*"` range instead of
   bundling a competing copy. The broad manifest above assumes a full-featured
@@ -231,7 +232,7 @@ project settings, each with its installed path:
 ```text
 User packages:
   npm:@acme/pi-team-tools
-    /Users/alice/.pi/agent/npm/@acme/pi-team-tools
+    /Users/alice/.pi/agent/npm/node_modules/@acme/pi-team-tools
 
 Project packages:
   git:github.com/acme/review-pack (filtered)

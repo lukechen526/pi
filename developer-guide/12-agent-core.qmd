@@ -35,7 +35,8 @@ families are:
 |---|---|
 | `agent_start`, `agent_end` | One low-level run begins/ends |
 | `turn_start`, `turn_end` | A provider response plus any tool batch |
-| `message_start`, `message_update`, `message_end` | User, assistant, and tool-result message lifetime |
+| `message_start`, `message_end` | User, assistant, and tool-result message lifetime |
+| `message_update` | Assistant streaming updates only |
 | `tool_execution_start`, `tool_execution_update`, `tool_execution_end` | Tool row/process lifetime |
 
 `Agent.processEvents()` first updates internal state, then awaits registered
@@ -112,7 +113,7 @@ second run when one is active. Because `prompt()` is async, the call returns a
 rejected promise:
 
 ```text
-Agent is already processing a prompt. Use steer() or followUp(), or wait for completion.
+Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.
 ```
 
 The rejection occurs before normalization, event emission, or transcript
@@ -344,10 +345,13 @@ appends them to context. Unless every result has `terminate: true`, it performs
 another provider turn. The all-results rule avoids one tool silently stopping a
 batch whose other tools expect a model follow-up.
 
-After each completed turn, the loop asks for steering messages. Steering
-messages enter before the next provider request. When there are no more tool
-calls and no steering messages, it asks for follow-up messages. Follow-ups
-restart the inner loop only after the agent would otherwise stop.
+After each completed turn, `prepareNextTurn` can refresh the context, model,
+or thinking level; if the caller's `shouldStopAfterTurn` hook returns `true`,
+the loop ends at that boundary before polling steering or follow-up queues.
+Otherwise it asks for steering messages. Steering messages enter before the
+next provider request. When there are no more tool calls and no steering
+messages, it asks for follow-up messages. Follow-ups restart the inner loop
+only after the agent would otherwise stop.
 
 ```text
 assistant/tool batch complete

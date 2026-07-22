@@ -29,8 +29,9 @@ Key source files include:
 
 - `packages/ai/src/types.ts`, `packages/ai/src/compat.ts`, and
   `packages/ai/src/models.ts`;
-- `packages/coding-agent/src/core/model-registry.ts`;
-- `packages/coding-agent/src/core/auth-storage.ts`.
+- `packages/coding-agent/src/core/model-runtime.ts` (canonical internal owner),
+  `packages/coding-agent/src/core/model-registry.ts` (extension-facing facade),
+  and `packages/coding-agent/src/core/auth-storage.ts`.
 
 ## Vocabulary and a concrete comparison
 
@@ -65,31 +66,32 @@ image to a text-only model.
 
 ## Model registry assembly
 
-`ModelRegistry` begins with generated built-in provider/model data, applies
-`models.json` provider and per-model overrides, merges custom models, applies
-OAuth-provider model modifications where required, and finally applies dynamic
-extension provider registrations.
+`ModelRuntime` is the canonical internal owner of composed providers and model
+catalogs. Its composition order is generated built-in models, `models.json`
+routing and custom-model upserts, extension model application, OAuth
+`modifyModels()` adjustments, and `models.json` `modelOverrides` last.
+`ModelRegistry` is an extension-facing compatibility facade over this runtime,
+not the internal owner of the request path.
 
 ```text
-built-in provider catalogs
-  -> models.json provider overrides
-  -> models.json per-model overrides
-  -> custom models added or replaced
-  -> OAuth model adjustment
-  -> extension registerProvider configuration
-  -> current ModelRegistry.models
+base built-in models
+  -> models.json routing/configuration and custom-model upserts
+  -> extension model application
+  -> OAuth modifyModels()
+  -> models.json modelOverrides (last)
+  -> composed provider models
 ```
 
 > **Failure isolation:** If `models.json` cannot be read, parsed, or
-validated, the registry records the error for the interactive application but
+validated, the runtime records the error for the interactive application but
 still loads the generated built-in catalog. The failed load contributes no
 custom models or catalog overrides. A typo in a local override can therefore
 disable that file's customizations without making every known built-in model
 disappear.
 
-`refresh()` resets dynamic API/OAuth registrations, reloads disk config, then
-reapplies registered extension providers. This prevents stale registrations
-from surviving a model configuration reload.
+`ModelRuntime.reloadConfig()` rebuilds composed providers while retaining the
+registered extension and OAuth registration maps, then reapplies those
+registrations. It does not simply reset dynamic registrations.
 
 ## Selecting an initial model
 
@@ -99,12 +101,10 @@ settings entries alone do not count. For such a session, it first tries the
 provider/model recorded on the current branch; if that model exists and has
 configured authentication, Pi restores it. Otherwise `findInitialModel()`
 selects a configured/default available model and Pi reports the fallback. The
-session similarly restores or chooses a thinking level, then clamps it to the
-selected model's capabilities.
-
-The selection is persisted with `model_change` and `thinking_level_change`
-entries. Resume is therefore not simply "use today's global default"; it
-attempts to continue the model choice that created historical context.
+thinking level is restored from the branch when a thinking entry exists;
+otherwise construction adds a missing thinking entry using the configured
+default. New sessions append both the initial model and thinking-level entries;
+resumed sessions restore branch state rather than always appending both.
 
 ## Thinking levels are Pi vocabulary
 
@@ -200,14 +200,17 @@ complete rate set chosen by its highest matching threshold. `calculateCost()` in
 2. Sum input-side usage as `input + cacheRead + cacheWrite`.
 3. Among tiers with `inputTokensAbove` strictly below that sum, choose the
    highest threshold.
-4. Apply that complete rate set to every token category on the request: input,
-   output, cache read, and cache write. Tokens are not split across base and
-   tiered rates.
+4. Apply that complete rate set to ordinary token categories: input, output,
+   and cache reads, plus ordinary (short) cache writes. Tokens are not split
+   across base and tiered rates. A `cacheWrite1h` one-hour cache write is the
+   exception: it is charged as `rates.input * 2`; the selected tier still
+   controls the ordinary categories and short cache writes.
 
 With the rates above, 272,000 input-side tokens still use `$5`/`$30`; 272,001
-switches the whole request to `$10`/`$45`. Multiple tiers work the same way:
-only the highest matching threshold is used. This metadata drives Pi's footer
-and session estimates; it does not determine the provider's invoice.
+switches the whole request to `$10`/`$45` for the ordinary categories. Multiple
+tiers work the same way: only the highest matching threshold is used. This
+metadata drives Pi's footer and session estimates; it does not determine the
+provider's invoice.
 
 ## Provider overrides and model overrides
 
@@ -288,24 +291,24 @@ agent directory. Its file backend creates parent directories with restrictive
 permissions and writes the file mode as `0600`. It uses a lock around reads and
 writes so multiple Pi processes do not race during token refresh.
 
-For the coding agent's `getApiKeyAndHeaders()` request path, credential
+For the coding agent's `ModelRuntime.getAuth()` request path, credential
 precedence is:
 
 1. The in-memory runtime override set by `--api-key`.
 2. The provider's `auth.json` credential: either an API key or an OAuth token.
    Expired OAuth credentials are refreshed while holding the storage lock.
-3. The provider `apiKey` configured by `models.json` or an extension, resolved
+3. A provider `apiKey` configured by `models.json` or an extension, resolved
    from a literal, environment interpolation, or `!command`.
+4. If no stored or configured credential supplies the key, the inherited
+   provider resolver may use ambient credentials such as environment variables,
+   AWS profiles, or application-default credentials (ADC).
 
-The registry deliberately asks `AuthStorage` without its broader standard
-provider-environment fallback before step 3. Provider-scoped `env` values saved
-with an API-key credential override `process.env` only while expanding that
-provider's configured key and headers. Runtime overrides are never persisted.
-
-The result is not merely a string. `getApiKeyAndHeaders()` returns either an
-error or the resolved API key, headers, and provider-scoped environment. With
-`authHeader: true`, it also creates `Authorization: Bearer <key>` and returns an
-error if no key resolved.
+Provider-scoped `env` values saved with an API-key credential override
+`process.env` only while expanding that provider's configured key and headers.
+Runtime overrides are never persisted. The result includes resolved auth,
+headers, and provider-scoped environment rather than just a string. With
+`authHeader: true`, it also creates `Authorization: Bearer <key>` and returns
+an error if no key resolved.
 
 ### OAuth lifecycle
 
@@ -316,10 +319,19 @@ An extension provider must supply the following shape (the methods are required
 for the corresponding OAuth integration; this is not a complete login flow):
 
 ```ts
+import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
+
 const oauthProvider = {
-  async login() { /* return stored credential details */ },
-  async refreshToken(credentials: unknown) { return credentials; },
-  async getApiKey(credentials: unknown) { return String(credentials); },
+  name: "example-oauth",
+  async login(_callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+    return { access: "access-token", refresh: "refresh-token", expires: Date.now() + 3600_000 };
+  },
+  async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
+    return credentials;
+  },
+  getApiKey(credentials: OAuthCredentials): string {
+    return credentials.access;
+  },
 };
 ```
 
@@ -341,18 +353,18 @@ label.
 Header precedence is easiest to read from lowest to highest:
 
 1. Coding-agent session and attribution defaults.
-2. Model static headers.
-3. Resolved provider configuration headers.
-4. Resolved per-model request headers.
-5. The generated bearer header when `authHeader: true`.
-6. Extension `before_provider_headers` mutations.
-7. Adapter defaults and transport handling for headers not already supplied.
+2. Resolved provider auth headers.
+3. Model static headers and configured per-model headers.
+4. Request-level headers supplied for this call.
+5. Extension `before_provider_headers` mutations.
+6. Adapter defaults and transport handling for headers not already supplied.
 
-Within the registry, steps 2–5 override earlier steps; its merged map then
-overrides attribution defaults. Extension mutations run last before dispatch.
-Setting a header to `null` asks adapters that support deletion to suppress that
-header. Never log the merged map: it may contain credentials as well as tracing
-IDs.
+Model static/configured headers override provider auth headers, and request-level
+headers override those model headers. When `authHeader: true`, the generated
+bearer header is part of the resolved auth layer; it is not a final layer after
+request headers. Extension mutations run last before dispatch. Setting a header
+to `null` asks adapters that support deletion to suppress that header. Never
+log the merged map: it may contain credentials as well as tracing IDs.
 
 ## The unified streaming API
 
@@ -369,14 +381,19 @@ An `AssistantMessage.stopReason` is one of `"stop"`, `"length"`,
 `aborted`. Keep these normalized values distinct from a provider's raw finish
 reason.
 
-`streamSimple(model, context, options)` in `src/compat.ts` is a dispatch point:
+For coding-agent, `ModelRuntime.streamSimple(model, context, options)` is
+the canonical dispatch point:
 
 ```text
 model selected by coding-agent
-  -> built-in model dispatch, or API provider lookup by model.api
+  -> ModelRuntime prepares auth/headers
+  -> composed provider and API adapter selected by model.api
   -> provider.streamSimple(model, Context, options)
   -> normalized AssistantMessageEventStream
 ```
+
+The older `src/compat.ts` `streamSimple()` remains a compatibility/default
+fallback for callers that do not supply an explicit stream function.
 
 Individual API adapters serialize messages/tools/system prompt into their wire
 format, parse streaming chunks, and emit normalized partial/final events. The
@@ -436,7 +453,7 @@ provider are restored.
 
 When a model does not appear or a request fails, work in this order:
 
-1. Inspect `ModelRegistry.getError()` for a `models.json` parse/load error.
+1. Inspect `ModelRuntime.getError()` for a `models.json` parse/load error.
 2. Confirm provider/model ID and API type.
 3. Use `getProviderAuthStatus()` as a non-secret configuration diagnostic, not
    as credential validation: it neither runs `!command` values nor refreshes
