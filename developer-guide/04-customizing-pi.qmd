@@ -315,11 +315,13 @@ The loader provides loaded context files and skills to `AgentSession`.
 
 `buildSystemPrompt()` turns those options into provider-independent system
 prompt text. The system prompt is rebuilt when the active tool set changes and
-when session resources reload. An extension that handles `before_agent_start`
-receives this already-built prompt; to change it, read the prompt you are
-given, modify or append to it, and return the result. Discarding the built
-prompt and writing a replacement from scratch throws away the inputs listed
-above—usually unintentionally.
+when session resources reload. For how this string, active tool schemas, and
+converted messages become a provider request—and how tool results continue the
+loop—see [The agent loop in one picture](06-lifecycle-and-hooks.qmd#the-agent-loop-in-one-picture).
+An extension that handles `before_agent_start` receives this already-built
+prompt; to change it, read the prompt you are given, modify or append to it,
+and return the result. Discarding the built prompt and writing a replacement
+from scratch throws away the inputs listed above—usually unintentionally.
 
 ## Themes
 

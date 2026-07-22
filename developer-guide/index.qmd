@@ -193,7 +193,8 @@ the rendered order recorded in `developer-guide/_quarto.yml` and in
 
 5. [Architecture: packages, ownership, and entry points](#sec:architecture)
    gives each package one clear job.
-6. [Prompt lifecycle](#sec:prompt-lifecycle) traces Enter to settlement and
+6. [Prompt lifecycle](#sec:prompt-lifecycle) starts with a unified agent-loop,
+   tool, and system-prompt assembly model, then traces Enter to settlement and
    maps every extension hook point.
 
 ### Building extensions
@@ -207,7 +208,8 @@ the rendered order recorded in `developer-guide/_quarto.yml` and in
 
 10. [Built-in tools](#sec:tools): the seven tools and their contracts.
 11. [Models, providers, and authentication](#sec:models).
-12. [Agent core](#sec:agent-core): the reusable loop, events, and queues.
+12. [Agent core](#sec:agent-core): implementation-level loop, events, queues,
+    and tool scheduling detail.
 13. [The terminal UI](#sec:tui).
 14. [Run modes and SDK embedding](#sec:modes).
 
