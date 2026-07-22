@@ -49,27 +49,20 @@ that require a model follow-up and no queued user messages.
 ```{mermaid}
 %%| label: fig-agent-loop-mental-model
 %%| fig-cap: "The model-facing loop. Tool schemas and tool guidance have different roles: schemas are sent in Context; guidance helps construct the system prompt."
-flowchart TD
-  R["Resources:<br/>context files, skills, prompt options"] --> A["Assemble system prompt"]
-  T["Active tool definitions:<br/>schemas, snippets, guidelines"] --> A
-  T --> C
-  M["Conversation messages"] --> C
-  A --> C["Context:<br/>systemPrompt + messages + tools"]
-  C --> P["Stream one assistant response"]
-  P --> Q{"Tool calls?"}
-  Q -->|"yes"| X["Validate, gate, execute,<br/>and append tool results"]
-  X --> N{"All results<br/>terminate?"}
-  N -->|"no"| C
-  N -->|"yes"| U
-  Q -->|"no"| U{"Queued message?"}
-  U -->|"steering or follow-up"| C
-  U -->|"none"| E["agent_end"]
-  classDef assembly fill:#dbe7f5,stroke:#2f5b8f,color:#000000
-  classDef loop fill:#fde2c4,stroke:#a05a00,color:#000000
-  classDef end fill:#e9e9e9,stroke:#666666,color:#000000
-  class A,C assembly
-  class P,Q,X,N,U loop
-  class E end
+%%| fig-width: 5.8
+stateDiagram-v2
+  [*] --> Context
+  Context: Assemble Context
+  Context: system prompt, messages, active tools
+  Context --> Response
+  Response: Stream one assistant response
+  Response --> Tools: tool calls
+  Response --> QueueCheck: no tool calls
+  Tools: validate, gate, execute, append results
+  Tools --> QueueCheck: complete batch
+  QueueCheck: poll steering, then automatic continuation, then follow-up
+  QueueCheck --> Context: steering, continuation, or follow-up
+  QueueCheck --> [*]: no queued message
 ```
 
 A **run** begins with `agent_start` and can contain several **turns**. A turn
@@ -100,30 +93,16 @@ assembly has three timings:
 ```{mermaid}
 %%| label: fig-model-context-assembly
 %%| fig-cap: "Model-context assembly. Resource discovery and input expansion happen before a run; messages are transformed and converted before every provider request."
-flowchart LR
-  subgraph START["Startup or reload"]
-    R["Context files, skills,<br/>prompt options, extensions"]
-    T["Built-in and extension<br/>tool definitions"]
-  end
-  subgraph INPUT["Submitted prompt"]
-    I["Skill command or<br/>prompt-template expansion"]
-    U["User and extension<br/>messages"]
-  end
-  R --> SP["Assemble<br/>system prompt"]
-  T --> SP
-  T --> AT["Select active tools"]
-  I --> U
-  U --> M["Rich AgentMessage[]"]
-  SP --> C["Provider Context"]
-  AT --> C
-  M --> X["context event"] --> L["convertToLlm()"] --> C
+%%| fig-width: 5.8
+flowchart TD
+  R["Resources:<br/>context files, skills, prompt options,<br/>tool definitions, extensions"]
+  R --> S["Assemble system prompt<br/>and select active tools"]
+  I["Submitted prompt:<br/>skill or template expansion,<br/>user and extension messages"]
+  I --> M["Rich AgentMessage[]"]
+  M --> L["context event and convertToLlm()"]
+  S --> C["Provider Context:<br/>systemPrompt + messages + tools"]
+  L --> C
   C --> P["Provider request"]
-  classDef source fill:#dbe7f5,stroke:#2f5b8f,color:#000000
-  classDef boundary fill:#fde2c4,stroke:#a05a00,color:#000000
-  classDef output fill:#d7ecd7,stroke:#2e6b2e,color:#000000
-  class R,T,I,U source
-  class SP,AT,X,L boundary
-  class C,P output
 ```
 
 #### Model-visibility inventory
@@ -209,47 +188,60 @@ of those `Context` fields.
 ### The continuation rule in simplified code
 
 The actual implementation emits events, supports parallel tools, and refreshes
-next-turn state. Its control flow can be read as this deliberately simplified
-version:
+next-turn state. It uses an inner loop for automatic tool continuation and
+steering, wrapped by an outer loop for follow-up. Its control flow can be read
+as this deliberately simplified version:
 
 ```ts
-while (true) {
-  const response = await streamModel(context);
-  if (response.stopReason === "error" || response.stopReason === "aborted") break;
+let pending = takeSteeringMessages(); // Also catches input queued just before the run starts.
 
-  const calls = response.toolCalls;
-  const results = await validateGateAndExecute(calls);
-  context.messages.push(response, ...results);
+while (true) { // Outer loop: only follow-up re-enters here.
+  let automaticContinuation = true;
 
-  if (calls.length > 0 && !results.every((result) => result.terminate)) continue;
+  while (automaticContinuation || pending.length > 0) {
+    context.messages.push(...pending); // Steering or a follow-up being delivered.
+    pending = [];
 
-  const steering = takeSteeringMessages();
-  if (steering.length > 0) {
-    context.messages.push(...steering);
-    continue;
+    const response = await streamModel(context);
+    if (response.stopReason === "error" || response.stopReason === "aborted") return;
+
+    const calls = response.toolCalls;
+    const results = await validateGateAndExecute(calls);
+    context.messages.push(response, ...results);
+
+    await prepareNextTurn();
+    if (await shouldStopAfterTurn()) return;
+
+    automaticContinuation = calls.length > 0 && !results.every((result) => result.terminate);
+    pending = takeSteeringMessages();
   }
 
-  const followUp = takeFollowUpMessages();
-  if (followUp.length > 0) {
-    context.messages.push(...followUp);
-    continue;
-  }
-
-  break;
+  // Only after both tool continuation and steering are exhausted:
+  pending = takeFollowUpMessages();
+  if (pending.length === 0) break;
 }
 ```
 
 This sketch preserves the rules that matter most: a failed tool becomes an
 error result the model can inspect, rather than ending the run; one terminating
 tool does not stop a batch unless **every** finalized result terminates; and
-steering is checked before follow-up. The real loop also calls
+steering is checked after every successful turn—even when tool results require
+another provider request. Follow-up is checked only after that tool/steering
+chain would otherwise become quiescent. A complete sibling tool batch remains
+atomic: a steering message never interrupts one tool or prevents a later
+sibling from starting.
+
+By default, each queue drains **one-at-a-time**, so one queued message is
+injected before a provider request. The configurable `"all"` mode injects all
+currently queued messages as one batch. The real loop also calls
 `prepareNextTurn` after each turn. Coding-agent uses that refresh point so a
 later request can see changed active tools, a rebuilt system prompt, model, or
 thinking level without changing the request already in progress. An embedding
 can also supply `shouldStopAfterTurn`; when it returns true, the generic loop
-ends before it polls steering or follow-up queues. Coding-agent's normal
-continuation behavior instead uses the queue rules shown above and its
-session-level recovery policy.
+ends before it polls steering or follow-up queues. A `"length"` stop reason
+fails every tool call in that response without executing it, because its
+arguments may be truncated. Coding-agent's normal continuation behavior instead
+uses the queue rules shown above and its session-level recovery policy.
 
 ## The complete path
 
@@ -294,13 +286,15 @@ calls `await this.session.prompt(userInput)`.
 When Pi is already streaming, regular Enter calls `session.prompt(text,
 { streamingBehavior: "steer" })`; Alt+Enter uses `"followUp"` (the editor keys
 are covered in [Using Pi day to day](#sec:using-pi)). **Steering** waits
-for the current assistant response and its tool work to finish, then injects
-the message before the next provider request. A **follow-up** is held until
-there are no more tool calls or steering messages and the run would otherwise
-stop, then starts another turn. Neither starts a second concurrent agent run;
-each call queues a message at that exact loop boundary. Esc takes the opposite
-path: it aborts the active run rather than queuing input — Stage 10 covers
-that. **Compaction** summarizes older context into a durable entry so the
+for the current assistant response and its complete tool batch, then injects
+the message before the next provider request—even if the tool results already
+require that request. A **follow-up** is held until there are no more automatic
+tool continuations or steering messages and the run would otherwise stop, then
+starts another turn. Neither starts a second concurrent agent run; each call
+queues a message at that exact loop boundary. When Pi is idle, Alt+Enter acts
+like Enter because there is no active run to defer. Esc takes the opposite path:
+it aborts the active run rather than queuing input — Stage 10 covers that.
+**Compaction** summarizes older context into a durable entry so the
 model's context window is not exceeded; [Sessions and context](#sec:sessions)
 covers it in detail. During compaction, non-command input is held by
 interactive mode until the compaction flow completes.
@@ -415,6 +409,13 @@ The three delivery modes that appear in this chapter:
 | `followUp` | While a run is streaming | Only when the run has no more tool calls or steering messages and would otherwise stop | Alt+Enter while streaming; `{ deliverAs: "followUp" }` |
 | `nextTurn` | Any time, by an extension | Appended to the next fresh user prompt; never interrupts or triggers a run | `pi.sendMessage(msg, { deliverAs: "nextTurn" })` |
 
+Steer and follow-up take the same input path: both run extension input
+interception and skill/template expansion before Pi queues them. Only their
+delivery boundary differs. For example, while Pi is continuing an edit through
+several tool calls, Enter on `also inspect the log` injects that instruction
+before the next provider request; Alt+Enter on `then update the changelog`
+waits until that tool chain and any steering work have finished.
+
 Next the session emits `before_agent_start`, whose handlers can add custom
 messages and chain a system-prompt override, then calls
 `_runAgentPrompt(messages)`. A minimal handler:
@@ -515,6 +516,14 @@ provider API accepts. Coding-agent supplies both callbacks when creating
 The resulting [`Context`](#sec:glossary) has exactly `systemPrompt`,
 `messages`, and `tools`. That shape lets the session persist rich UI-only
 entries while only a selected representation reaches the LLM.
+
+The session and lifecycle chapters own adjacent parts of this process. [Sessions,
+trees, and compaction](#sec:sessions) explains how Pi selects the active branch
+and rebuilds its durable history into session context. This stage then gives an
+extension one per-request chance to adjust that message view before provider
+conversion. A `context` handler changes neither the JSONL history nor the
+compaction record; use session APIs or session hooks when durable state is the
+goal.
 
 **Why an extension author cares:** the `context` event is where you reshape the
 message list the model is about to see — per request, not just at run start.
@@ -740,25 +749,27 @@ plain text, this is where the run decides to stop.
 Each final tool result is appended to the in-memory agent context and becomes
 the model-facing material for the next turn. This includes schema failures,
 blocked calls, and thrown tool errors: they become error `toolResult` messages
-so the model can correct or explain the failure. If an assistant response
-contains tool calls and their batch is not explicitly terminating, the loop
-starts another assistant response. If the model instead returns ordinary final
-text, the loop checks steering messages first and follow-up messages when it
-would otherwise stop:
+so the model can correct or explain the failure. At every successful turn
+boundary, the loop first checks steering. It then continues when either steering
+is present or an assistant tool batch is not explicitly terminating. Only when
+neither condition applies does it check follow-up:
 
 ```{mermaid}
 %%| label: fig-next-action
-%%| fig-cap: "After a toolResult is appended, the loop decides what happens next. Queued steering beats follow-up; an empty loop emits agent_end."
-flowchart TD
-  Q1{"tool calls and<br/>not terminating?"}
-  Q1 -->|"yes"| NT["next model turn"]:::cont
-  Q1 -->|"no"| Q2{"steering queued?"}
-  Q2 -->|"yes"| NT
-  Q2 -->|"no"| Q3{"follow-up queued?"}
-  Q3 -->|"yes"| NT
-  Q3 -->|"no"| END["agent_end"]:::term
-  classDef cont fill:#d7ecd7,stroke:#2e6b2e,color:#000000
-  classDef term fill:#e9e9e9,stroke:#666666,color:#000000
+%%| fig-cap: "The queue boundary after a turn. Steering is polled before automatic tool continuation; follow-up is polled only after both are exhausted."
+%%| fig-width: 5.8
+stateDiagram-v2
+  [*] --> Steering
+  Steering: poll steering
+  Steering --> NextRequest: steering present
+  Steering --> Automatic: steering empty
+  Automatic: automatic tool continuation?
+  Automatic --> NextRequest: yes
+  Automatic --> FollowUp: no
+  FollowUp: poll follow-up
+  FollowUp --> NextRequest: follow-up present
+  FollowUp --> [*]: follow-up empty
+  NextRequest: inject queued input and request again
 ```
 
 A tool can return `terminate: true` to hint that the next model call should be
@@ -838,8 +849,9 @@ must honor the signal. For the complete recovery matrix, see [Failure and
 recovery](#sec:failure).
 
 Above this boundary, `AgentSession` may retry, compact older context, rebuild
-it, and continue; [Sessions and context](#sec:sessions) explains compaction.
-Session replacement or process exit emits `session_shutdown`, where
+it, and continue; [Sessions and context](#sec:sessions) explains compaction and
+links to the official [Compaction reference](https://pi.dev/docs/latest/compaction)
+for its detailed rules. Session replacement or process exit emits `session_shutdown`, where
 session-bound resources should be cleaned up. `agent_end` means the current
 low-level loop stopped. `agent_settled` is later: Pi has no automatic retry,
 compaction retry, or queued continuation left.

@@ -28,6 +28,13 @@ handler registered to observe or affect that occurrence. The examples below
 use the public `ExtensionAPI` contract rather than internal implementation
 details.
 
+Choose a hook by the boundary it exposes, not by a familiar event name. Input
+hooks see submitted text; `before_agent_start` sees one prepared prompt;
+`context` sees the message view before each model request; tool hooks see
+validated calls or results; and session hooks own durable state and lifecycle.
+That boundary-first choice keeps an extension narrow and avoids changing a
+lower-level representation when an earlier public API is sufficient.
+
 ## Prerequisites
 
 Finish [Customizing Pi](#sec:resources) first — this chapter assumes you know
@@ -132,7 +139,8 @@ flowchart TD
 The diagram omits message-level events and detailed branches for session
 operations; the table below includes some representative events omitted from
 the diagram. For the complete event sequence, return values, and parallel-tool
-ordering, see `packages/coding-agent/docs/extensions.md`; use
+ordering, see the official [Extensions documentation](https://pi.dev/docs/latest/extensions)
+or `packages/coding-agent/docs/extensions.md`; use
 `packages/coding-agent/src/core/extensions/types.ts` for the exact types.
 
 ### Event groups and common use
@@ -302,8 +310,11 @@ small JSON record into the session file as a custom entry; custom entries are
 durable but never sent to the model. Because `/reload`, `/resume`, and
 restarting Pi all discard module-level variables, the `session_start` handler
 rebuilds `greetingCount` by scanning the session entries — the durable copy —
-for the last `hello-pi-count` record. See `pi.appendEntry()` in
-`packages/coding-agent/docs/extensions.md`.
+for the last `hello-pi-count` record. On a branched session, choose deliberately
+between scanning every historic entry and the active branch; [Sessions, trees,
+and compaction](#sec:sessions) explains how the selected leaf determines the
+history that becomes model context. See `pi.appendEntry()` in the official
+[Extensions documentation](https://pi.dev/docs/latest/extensions).
 
 3. Start Pi in any project. The startup notification confirms discovery.
    Run `/hello-pi Ada` to exercise the command. Then type the literal prompt
