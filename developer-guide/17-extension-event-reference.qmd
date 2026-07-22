@@ -5,9 +5,10 @@ This chapter is a practical reference for choosing extension hooks. Read
 tools](#sec:tools) for tool lifecycle, [Models](#sec:models) for provider hooks,
 and [Run modes](#sec:modes) for mode-specific behavior. It does not replace the
 source types in the extension types file,
-`packages/coding-agent/src/core/extensions/types.ts`, or the exhaustive
-`packages/coding-agent/docs/extensions.md`; use those when writing
-code. Its goal is to make event choice, return value, context, and
+`packages/coding-agent/src/core/extensions/types.ts`, the exhaustive
+`packages/coding-agent/docs/extensions.md`, or the official
+[Extensions documentation](https://pi.dev/docs/latest/extensions); use those
+when writing code. Its goal is to make event choice, return value, context, and
 lifecycle safety explicit before implementation.
 
 ## Use this chapter as an index
@@ -190,7 +191,10 @@ pi.on("session_tree", (event) => {
 
 Use these hooks for policy or summary customization. Use `context` if the goal
 is only to hide/filter data for one provider call; a context hook does not
-change durable compaction or tree state.
+change durable compaction or tree state. For the underlying session-to-context
+model, start with [Sessions, trees, and compaction](#sec:sessions); for cut
+points, split turns, and the complete custom-summary contract, see the official
+[Compaction documentation](https://pi.dev/docs/latest/compaction).
 
 ### Session information
 

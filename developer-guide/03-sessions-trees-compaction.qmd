@@ -38,6 +38,12 @@ common history. The **leaf** is the current last entry on that path. **Context**
 is the selected representation sent to the model; it is not automatically the
 whole file on disk.
 
+This distinction is the starting point for extension work. The session file
+keeps durable history, including branches and extension state. Before a model
+request, Pi derives a model-facing view from the selected branch, then converts
+that view to provider messages. A record can therefore remain available to
+`/resume` or `/tree` without being sent on the next request.
+
 A concrete timeline fixes the terms. You run `pi` in `~/proj` and exchange
 ten messages: that conversation is one **session**, persisted to one
 [JSONL](#sec:glossary) file (JSON Lines: one complete JSON object per line),
@@ -148,9 +154,12 @@ is not a `parentId` edge inside this entry tree.
 
 The active branch is the chain from the current leaf to the root, read in
 chronological order. Other children are not provider context — the messages
-actually sent to the model provider — merely because they exist on disk. When
-debugging a surprising model response, inspect that active path rather than
-the whole session file (the [debugging checklist](#sec:session-debugging)
+actually sent to the model provider — merely because they exist on disk.
+Conceptually, the next request is built by following parent links from the
+selected leaf, reversing that chain into chronological order, applying any
+compaction checkpoint, and converting the selected entries into provider
+messages. When debugging a surprising model response, inspect that active path
+rather than the whole session file (the [debugging checklist](#sec:session-debugging)
 below walks through this).
 
 ### A worked example: file state and leaf after each step
@@ -256,7 +265,19 @@ example:
 The header's `id` identifies the session, not a node. Unlike every subsequent
 entry, the header has no `parentId` and cannot be selected as the active leaf.
 `version` controls format migration, `timestamp` and `cwd` describe where the
-session began, and optional `parentSession` records fork provenance only.
+session began, and optional `parentSession` records fork provenance only. Pi
+migrates older supported session versions when it loads them; extension authors
+normally use `SessionManager` rather than depending on a particular on-disk
+version.
+
+::: {.callout-note}
+## Official session-format reference
+
+This chapter explains how session persistence affects a model request. For the
+complete JSONL schema, all entry kinds, version details, and the public
+`SessionManager` API, see the official
+[Session format documentation](https://pi.dev/docs/latest/session-format).
+:::
 
 Every line after the header is one entry. A user message and the assistant's
 reply look like this (abridged from
@@ -367,9 +388,20 @@ and rebuilds context from that summary plus the retained entries. Tool-call and
 tool-result relationships constrain where the cut may land. Raw history stays
 on disk; only provider context is replaced.
 
+For an extension author, the important contrast is simple: compaction changes
+what the next model request sees, not what the session remembers. It can run
+automatically at the threshold, recover from a context overflow before retrying
+a turn, or run when the user invokes `/compact`. Repeated compactions keep
+summarizing older model-visible work while retaining the recent working suffix.
+`/tree` has a related but separate branch-summary flow: it can carry a concise
+account of the branch being left into the newly selected branch.
+
 An extension can intercept `session_before_compact` to cancel compaction or
 provide a custom summary, then observe the result through `session_compact`.
-See the [extension event reference](#sec:events) for the complete event shape.
+`session_before_tree` and `session_tree` provide the corresponding branch-summary
+boundaries. See the [extension event reference](#sec:events) for the complete
+event shapes, and the official [Compaction documentation](https://pi.dev/docs/latest/compaction)
+for cut-point rules, split turns, summary structure, and custom-summary fields.
 
 ### Split turns and tool continuity {#sec:split-turns}
 
@@ -570,8 +602,10 @@ Pi substitutes the summary for the older span and keeps entries beginning at
 [`firstKeptEntryId`](#sec:split-turns). This field stores the ID of the first
 retained entry, not an array index: the context builder follows the active
 parent chain, inserts the compaction summary, then retains that entry and the
-later entries on the chain. Replaced records remain in JSONL for history but
-are not sent to the LLM.
+later entries on the chain. Newer compaction entries can also materialize that
+retained tail directly so Pi can rebuild from the checkpoint; this is an
+on-disk optimization, not a different model-context concept. Replaced records
+remain in JSONL for history but are not sent to the LLM.
 
 `buildSessionContext()` also scans the full path to restore the current model
 and [thinking level](#sec:glossary), then converts selected entries to
