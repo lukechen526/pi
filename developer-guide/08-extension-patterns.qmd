@@ -3,10 +3,16 @@
 In plain terms: this chapter is a pattern catalog for extensions that are
 meant to last. Each pattern is a small, copyable answer to one recurring
 question — "how do I block a dangerous command?", "where does my state go?",
-"how do I inject a message mid-run?" — organized from the safest, simplest
-patterns to the ones that need the most care.
+"how do I inject a message mid-run?" — presented in a uniform shape:
+**the problem, the recipe, the failure mode it prevents, and how to verify
+it.**
 
-Patterns progress by surface area: **basic** patterns observe or intercept; **intermediate** patterns add tools or durable state; **advanced** patterns configure behavior through settings and package it for a team. Start with the smallest tier that solves the task. A hook that must remember something has entered tier 2.
+Tiers are ordered by coupling and failure risk, not by line count. **Tier 1**
+hardens behavior Pi already has — a mistake here breaks one tool call. **Tier
+2** gives your extension a capability of its own — a mistake here corrupts
+state or files. **Tier 3** composes and evolves extensions — mistakes here
+leak across reloads, sessions, and providers. Stop at the smallest tier that
+solves your task.
 
 ```{mermaid}
 %%| label: fig-pattern-tiers
@@ -14,51 +20,42 @@ Patterns progress by surface area: **basic** patterns observe or intercept; **in
 %%| fig-width: 5.8
 %%{init: {"flowchart": {"nodeSpacing": 10, "rankSpacing": 10}, "themeVariables": {"fontSize": "11px"}}}%%
 flowchart LR
-  T1["Tier 1: observe and intercept<br/>safety gate · inject context"]
-  T2["Tier 2: tools and state<br/>durable state · dynamic tools ·<br/>UI, sessions, queues"]
-  T3["Tier 3: configuration and packaging<br/>settings layers · team package"]
+  T1["Tier 1: harden existing behavior<br/>safety gate · noninteractive policy ·<br/>inject context"]
+  T2["Tier 2: own one capability<br/>robust tool · schemas · durable state ·<br/>file queues · UI and delivery choices"]
+  T3["Tier 3: compose and evolve<br/>active tools · dynamic loading ·<br/>session replacement · events · compatibility"]
   T1 --> T2 --> T3
 ```
 
-This chapter is the production follow-up to [Extensions: change Pi without
-forking it](#sec:extensions). Start with the safety gate, then adapt the
-context, state, concurrency, and dynamic-tool patterns one at a time. Finish
-with the verification ladder before sharing or deploying the extension. The
-examples are independent and illustrative; they are not a single package to
-copy wholesale.
+This chapter is the production follow-up to [Your first
+extension](#sec:extensions). The examples are independent recipes, not a
+single package to copy wholesale.
 
 ## Prerequisites
 
 Finish [Your first extension](#sec:extensions) first — this chapter assumes
 you can write and load a one-file extension with `pi -e path/to/extension.ts`,
 and that you know what a [hook](#sec:glossary), a session, and a slash
-command are. The snippets reference real repository source files; a checkout
-of the `pi` repository lets you follow them, but is not required.
+command are. Event names below refer to the map in [The prompt
+lifecycle](#sec:prompt-lifecycle). The snippets reference real repository
+source files; a checkout of the `pi` repository lets you follow them, but is
+not required.
 
-## Start with the decision, not the API
+One mechanism check before the patterns: use **configuration** for a stable
+value, an **extension** for behavior that reacts to events or needs Pi APIs,
+and a **core change** only when every host must share the behavior.
+[Customizing Pi](#sec:resources) is the canonical guide to that choice; the
+rest of this chapter assumes you picked the middle row.
 
-Use **configuration** for a stable value, an **extension** for behavior that
-reacts to events or needs Pi APIs, and a **core change** only when the behavior
-must be shared by every host:
+## Tier 1 — Harden existing behavior
 
-| Mechanism | Use it when the change is... | Example |
-|---|---|---|
-| Configuration | A stable value a user or project chooses | Changing a model default |
-| Extension | Behavior that reacts to events or needs Pi APIs | Asking for confirmation before `bash` |
-| Core change | Behavior every host must share | Changing how every tool batch is scheduled |
+### Gate a dangerous tool call
 
-The rest of this chapter assumes the middle row: you have decided an
-extension is the right mechanism and now need the pattern.
+**Problem:** the model can propose destructive commands; you want a human in
+the loop for the ones that match a policy.
 
-## Tier 1 - Basic: observe and intercept
-
-### First gate: safety and noninteractive behavior
-
-Before an extension can mutate files, invoke processes, or expose a powerful
-tool, decide what happens when there is no interactive UI. `ctx.hasUI` is false
-in noninteractive modes, so a safe default must not depend on a dialog. This
-example observes the existing `bash` tool rather than replacing all shell
-behavior:
+**Recipe:** hook `tool_call`, which fires after schema validation and before
+execution, and return `{ block: true, reason }` to stop a call. The reason
+reaches the model as an error tool result it can respond to.
 
 ```ts
 // ~/.pi/agent/extensions/block-rm.ts
@@ -81,23 +78,71 @@ export default function register(pi: ExtensionAPI) {
 }
 ```
 
-The call is already schema-validated when the hook runs. The
-`isToolCallEventType` guard provides a typed `event.input` for a built-in tool.
-Do not mutate a tool's input merely to implement policy when blocking is more
-honest; Pi does not run a second schema validation after a hook mutates input.
-The shipped `permission-gate.ts` example follows the same order. Test both the
-allow and deny paths, including the no-UI fallback, before adding more behavior.
+The `isToolCallEventType` guard provides a typed `event.input` for a built-in
+tool. The shipped `permission-gate.ts` example follows the same order.
 
-**Try it.** Save the snippet above, run `pi -e ~/.pi/agent/extensions/block-rm.ts`,
-and ask Pi to remove a scratch directory with `rm -rf`. Confirm the command
-never runs and the model receives your `reason` as an error it can respond to.
-Then approve a harmless `ls` to confirm allowed calls still proceed.
+**Failure modes:**
+
+- *The string matcher is illustrative, not a shell policy.* `includes("rm -rf")`
+  misses spacing variants, option ordering, aliases, and scripts. Treat it as
+  a demonstration of the hook, not as command parsing.
+- *Blocking is more honest than mutating.* `event.input` is mutable and later
+  handlers see your changes, but Pi does not revalidate after a mutation —
+  reserve mutation for narrow argument patches, not policy.
+- *A throwing `tool_call` handler blocks the call* (fail-safe) and the error
+  reaches the model as an error tool result. Test both the allow and deny
+  paths.
+
+**Verify:** save the snippet, run `pi -e ~/.pi/agent/extensions/block-rm.ts`,
+and ask Pi to remove a scratch directory with `rm -rf`: the dialog appears,
+denying stops the command, and the model receives your reason as an error it
+can respond to. A harmless `ls` never triggers the dialog and runs normally.
+Repeat with `pi -p` (no UI) to confirm the deny-by-default fallback.
+
+### Ask the user without hanging noninteractive hosts
+
+**Problem:** any gate that asks the user needs an answer even when no user can
+answer — print and JSON modes return cancellation defaults, and an RPC client
+that never responds parks your handler forever.
+
+**Recipe:** decide the noninteractive policy first (deny, or a configured
+default), then add a timeout or an `AbortSignal` so a silent client cannot
+wait forever:
+
+```ts
+const confirmed = await ctx.ui.confirm(
+  "Timed confirmation",
+  "Allow this operation?",
+  { timeout: 5000 }, // auto-cancels: confirm() returns false on timeout
+);
+
+// Or, to distinguish timeout from user cancel:
+const controller = new AbortController();
+const timeoutId = setTimeout(() => controller.abort(), 5000);
+const ok = await ctx.ui.confirm("Confirm", "Proceed?", { signal: controller.signal });
+clearTimeout(timeoutId);
+// ok === false with controller.signal.aborted → timed out, not denied
+```
+
+The per-mode behavior of every UI call — TUI, RPC, JSON, print — is in
+[Host safety](#sec:extensions) in the first-extension chapter. Require
+`ctx.mode === "tui"` for components that need a terminal.
+
+**Failure mode:** a gate that blocks forever in RPC mode looks like a hung
+agent; a gate that silently denies in print mode looks like a broken tool.
+Both are policy bugs, not Pi bugs.
+
+**Verify:** run the gate under `pi -p` and confirm the noninteractive path
+executes; run with a short timeout and confirm the deny path fires on time.
 
 ### Inject focused context
 
-`before_agent_start` is the correct point to add per-prompt instructions. It
-can add a custom message and/or replace the chained system prompt. The custom
-message is stored in the session and reaches the LLM; a notification is not.
+**Problem:** you want the model to behave differently for some prompts —
+without rewriting Pi's whole system prompt.
+
+**Recipe:** `before_agent_start` is the correct point for per-prompt
+instructions. It can add a custom message (stored in the session, sent to the
+model) and/or adjust the chained system prompt:
 
 ```ts
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -116,166 +161,56 @@ export default function register(pi: ExtensionAPI) {
 }
 ```
 
-Here, `display: true` shows the injected custom message in the transcript; the
-message is sent to the model whether or not it is displayed.
+`display: true` shows the injected message in the transcript; the message
+reaches the model either way.
 
-Multiple handlers see a chained system prompt. Prefer appending a narrow,
-conditional instruction over replacing the entire system prompt; replacement
-can accidentally discard skills, tools, context files, and user-provided
-instructions. For a message-level context transformation before *every*
-provider request, use the `context` event instead; see
-[the extension event reference](#sec:choose-event)
-for when `context` is the right boundary versus prompt-scoped or provider hooks.
+**Failure mode:** *replacing* the system prompt instead of appending can
+discard skills, tools, context files, and user-provided instructions. Prefer a
+narrow, conditional append. For a message-level transformation before *every*
+provider request rather than per prompt, use the `context` event — [the
+prompt lifecycle](#sec:prompt-lifecycle) explains the boundary difference.
 
-## Tier 2 - Intermediate: tools and state
+**Verify:** run a prompt with and without the trigger prefix and confirm only
+the triggered run shows your instruction.
 
-### State that survives restart and branching
+## Tier 2 — Own one tool or stateful capability
 
-In plain terms: anything your extension keeps in a variable disappears when Pi
-reloads, restarts, resumes, or forks. To make state survive, store a snapshot
-inside something that is already durable — a tool result's `details` — and
-rebuild the variable from the session whenever the session (re)starts or the
-active branch changes.
+### A robust custom tool
 
-Here is the minimum session-tree model needed for this pattern. A session is a
-tree of persisted entries: a branch is one root-to-leaf path, and the active
-branch is the path currently selected for the conversation. `getBranch()`
-returns that path and excludes sibling branches. Full session semantics are in
-[Sessions, branches, and durable context](#sec:sessions), and the complete event
-payload is in the [extension event reference](#sec:choose-event).
+**Problem:** your tool works in the demo, then fails in production: huge
+output floods the context, Esc cannot stop it, and errors confuse the model.
 
-```{mermaid}
-%%| label: fig-state-rebuild
-%%| fig-cap: "Durable state loop. A tool stores a snapshot in its result's details, which Pi persists as a session entry. On session_start and again on session_tree (branch navigation), the extension walks getBranch() and rebuilds its in-memory state from the snapshots."
-%%{init: {"flowchart": {"nodeSpacing": 16, "rankSpacing": 16}, "themeVariables": {"fontSize": "12px"}}}%%
-flowchart TD
-  D["Serializable<br/>tool-result details"] --> E["Durable<br/>session entry"]
-  E --> B["Scan active branch<br/>root to leaf"]
-  T["session_start /<br/>session_tree"] --> B
-  B --> R["Rebuild in-memory<br/>state"]
-```
+**Recipe:** [Your first extension](#sec:extensions) covers the minimal
+contract (`name`, `label`, `description`, TypeBox `parameters`, `execute`
+returning `content`/`details`). The production checklist:
 
-`session_tree` is emitted **after active-branch navigation** (for example,
-`/tree`, fork, or another branch change). At that use site, rebuild from the
-new active branch rather than incrementally retaining state from the old one.
-Rebuild on both `session_start` and `session_tree` so reload, resume, fork, and
-branch navigation stay consistent:
+- **Throw from `execute` to report an error** to the model; a returned
+  `isError` field does nothing.
+- **Forward `signal`** into `fetch`, process helpers, and long computations so
+  Esc can cancel your work.
+- **Use `onUpdate`** for incremental result rendering.
+- **Truncate large output yourself** — custom tool output is *not*
+  automatically truncated. The built-in limits are 50 KB or 2,000 lines;
+  use the exported helpers (`truncateHead`, `truncateTail`, `formatSize`,
+  `DEFAULT_MAX_BYTES`, `DEFAULT_MAX_LINES`) and tell the model where the full
+  output went. The shipped `truncated-tool.ts` example wraps `rg` end to end.
+- **`terminate: true`** hints that the follow-up model call should be skipped,
+  but it takes effect only when *every* finalized result in the batch
+  terminates — see [the prompt lifecycle](#sec:prompt-lifecycle) for the batch
+  rule.
+- Add `promptSnippet` for a one-line entry in Pi's default system prompt and
+  `promptGuidelines` for usage bullets. Each guideline must name its tool,
+  because Pi flattens all active tools' guidelines into one section: write
+  `Use hello when the user asks for a greeting,` not `Use this tool when ...`.
 
-```ts
-// state, emptyState(), and MyState are declared by your extension module.
-function rebuildState(ctx: ExtensionContext) {
-  state = emptyState();
-  for (const entry of ctx.sessionManager.getBranch()) {
-    if (entry.type !== "message") continue;
-    const msg = entry.message;
-    if (msg.role !== "toolResult" || msg.toolName !== "my_tool") continue;
-    const snapshot = msg.details as MyState | undefined;
-    if (snapshot) state = snapshot;
-  }
-}
+**Verify:** test a malformed call (schema rejection), a cancellation (Esc
+mid-execution), and an oversized result.
 
-pi.on("session_start", async (_event, ctx) => rebuildState(ctx));
-pi.on("session_tree", async (_event, ctx) => rebuildState(ctx));
-```
+### TypeBox schema design
 
-Reading the scan top to bottom: initialize empty in-memory state, walk
-`ctx.sessionManager.getBranch()` from root to the current leaf, validate
-matching tool-result entries, and apply their snapshots in order so the last
-one becomes the current state.
-
-The shipped `todo.ts` extension at
-`packages/coding-agent/examples/extensions/todo.ts` implements this rebuild loop
-end to end.
-
-**Try it.** Extend `todo.ts` (or your own copy of the snippet above) with a
-counter entry rendered via `pi.registerEntryRenderer`, then `/reload`,
-`/resume`, and `/fork`. Verify the rebuilt state matches on every path.
-
-For state that should be visible in the transcript but never sent to the
-model, use `pi.appendEntry("my-state", data)` and
-`pi.registerEntryRenderer("my-state", renderer)`. Do not use `sendMessage`
-for private bookkeeping: custom messages are model context.
-
-For a read-modify-write operation, serialize mutations of the same file while
-leaving different files concurrent. `withFileMutationQueue` is exported from
-`@earendil-works/pi-coding-agent`:
-
-```ts
-import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { readFile, writeFile } from "node:fs/promises";
-
-await withFileMutationQueue(filePath, async () => {
-  const current = await readFile(filePath, "utf8");
-  await writeFile(filePath, update(current));
-});
-```
-
-### Dynamic tools and active-tool policy
-
-`pi.registerTool()` may be called after startup. Pi refreshes it immediately
-for the current session; it appears in `pi.getAllTools()` and can be enabled
-with `pi.setActiveTools()`. To avoid accidentally removing useful tools, start
-from the current selection:
-
-```ts
-const active = pi.getActiveTools();
-pi.setActiveTools([...new Set([...active, "my_tool"])]);
-```
-
-Changing active tools affects the next turn and rebuilds the system prompt.
-`setActiveTools(["read", "bash"])` is a real policy change, not just a UI
-filter. Use it with a command/shortcut that clearly signals the new mode.
-
-Command handlers receive `ExtensionCommandContext`: an `ExtensionContext` with
-user-initiated session controls such as `newSession`, `fork`, `navigateTree`,
-`switchSession`, `reload`, and `waitForIdle`. Put session replacement or
-navigation in a command handler. A normal event handler can run within the
-active agent loop, while these operations replace contexts and must be
-coordinated from an explicit user command; the old context is stale afterward.
-
-### Tools: make the contract for the AI model explicit
-
-A custom tool needs a unique `name`, human-facing `label`, description for the
-AI model, TypeBox `parameters`, and `execute`. The return `content` goes
-to the LLM; `details` is structured metadata for renderers and state recovery.
-
-Add `promptSnippet` when the tool should have a one-line entry in Pi's default
-system prompt. Add `promptGuidelines` as instructions for the AI model while
-the tool is active. Each guideline must name its tool because Pi flattens all active tool
-guidelines into one section: write `Use hello when the user asks for a greeting,`
-not `Use this tool when the user asks for a greeting.`
-
-For robust tools:
-
-- Throw from `execute` to report an error to the model.
-- Forward `signal` into `fetch`, process helpers, and long computations.
-- Use `onUpdate` for incremental result rendering.
-- Truncate large output with the exported truncation helpers; built-in limits
-  are 50 KB or 2,000 lines.
-- For string enums exposed to Google-compatible APIs, see
-  [StringEnum vs Type.Union](#stringenum-vs-typeunion-for-string-literals).
-- Use `withFileMutationQueue(absolutePath, callback)` around the *entire*
-  read-modify-write window for a file-mutating tool. Import it from
-  `@earendil-works/pi-coding-agent`.
-
-An extension may override a built-in tool by registering the same name. You
-would do this to change how `read`, `bash`, or another built-in behaves for
-every model call — for example to redact secrets from `read` output or to route
-`bash` through a sandbox. The trade-off: Pi's own session and UI code was
-written against the built-in result shape, so the override must preserve the
-built-in result `details` shape that code expects, or transcripts and
-renderers break in non-obvious ways. If the override omits a renderer, Pi can
-reuse the built-in renderer slot, but prompt metadata is not inherited. Prefer
-a `tool_call` hook (Tier 1) when blocking or observing is enough; override only
-when the result itself must change.
-
-### Understanding TypeBox schemas for tool parameters
-
-A TypeBox schema validates model-supplied arguments at runtime and generates
-the JSON Schema sent to the provider. A runtime schema is therefore required
-even when TypeScript already knows the parameter types.
-
-#### Common schema patterns
+[Your first extension](#sec:extensions) introduced the core idea — the schema
+validates model-supplied arguments at runtime and generates the JSON Schema
+sent to the provider. The design decisions that remain:
 
 ```ts
 import { Type } from "@earendil-works/pi-ai";
@@ -291,129 +226,145 @@ Type.Object({
   path: Type.String({ description: "File path" }),
   recursive: Type.Optional(Type.Boolean({ default: false })),
 })
+```
 
-// String enum for Google's Gemini API and other providers requiring enum JSON Schema
+Every parameter deserves a `description`: it is part of what the model reads
+when deciding arguments. If your tool accepts a path, normalize a leading `@`
+before resolving it — some models include one, and built-in tools strip it.
+
+#### StringEnum vs Type.Union for string literals {#stringenum-vs-typeunion-for-string-literals}
+
+For tools exposed to Google's Gemini API, use `StringEnum` from
+`@earendil-works/pi-ai` instead of
+`Type.Union([Type.Literal("a"), Type.Literal("b")])`. The literal union
+serializes to an `anyOf`/`const` representation that Google's API rejects, so
+the model may emit values your schema never intended. `StringEnum` emits the
+plain string `enum` form every provider understands:
+
+```ts
 import { StringEnum } from "@earendil-works/pi-ai";
 StringEnum(["small", "medium", "large"], { description: "Size" })
 ```
 
-#### How to think about schemas as a JavaScript developer
+### State that survives restart and branching {#state-that-survives-restart-and-branching}
 
-A TypeBox `Type.Object({...})` resembles a machine-readable JSDoc `@param`
-block. It answers three questions:
+**Problem:** anything your extension keeps in a variable disappears when Pi
+reloads, restarts, resumes, or forks.
 
-1. **What shape of JSON does the model need to send?** (the schema itself)
-2. **What TypeScript type does `params` have in `execute`?** (derived from schema)
-3. **What does the model see in its tool description?** (serialized to JSON Schema)
+**Recipe:** store a snapshot inside something already durable — a tool
+result's `details` — and rebuild the variable from the session whenever the
+session (re)starts or the active branch changes. A session is a tree of
+persisted entries: a branch is one root-to-leaf path, and `getBranch()`
+returns the active path, excluding sibling branches. Full session semantics
+are in [Sessions, branches, and durable context](#sec:sessions).
 
-If you define a parameter as `Type.String()` and the model sends `42`, Pi
-rejects the call before your `execute` runs. This prevents malformed tool calls
-from reaching your code.
+```{mermaid}
+%%| label: fig-state-rebuild
+%%| fig-cap: "Durable state loop. A tool stores a snapshot in its result's details, which Pi persists as a session entry. On session_start and again on session_tree (branch navigation), the extension walks getBranch() and rebuilds its in-memory state from the snapshots."
+%%{init: {"flowchart": {"nodeSpacing": 16, "rankSpacing": 16}, "themeVariables": {"fontSize": "12px"}}}%%
+flowchart TD
+  D["Serializable<br/>tool-result details"] --> E["Durable<br/>session entry"]
+  E --> B["Scan active branch<br/>root to leaf"]
+  T["session_start /<br/>session_tree"] --> B
+  B --> R["Rebuild in-memory<br/>state"]
+```
 
-#### StringEnum vs Type.Union for string literals
-
-For tools exposed to Google's Gemini API, use `StringEnum` from `@earendil-works/pi-ai`
-instead of `Type.Union([Type.Literal("a"), Type.Literal("b")])`. Google's API does
-not support the `enum` constraint produced by `Type.Union` with literals, so the
-model might suggest invalid values. `StringEnum` generates the correct JSON Schema
-form that all providers understand.
-
-### Commands, UI, and rendering
-
-Commands are best for direct user actions and configuration. If multiple
-extensions register the same name, Pi keeps both and gives them numeric
-invocation suffixes in load order. Do not assume a command name is globally
-unique after loading third-party packages.
-
-`ctx.ui` supports notifications, select/confirm/input/editor dialogs, footer
-status, widgets, editor text, themes, custom autocomplete, tool expansion, and
-replacement editors. For a multi-key interaction, `ctx.ui.custom()` temporarily
-replaces the editor with a `@earendil-works/pi-tui` component.
-
-A minimal command that asks the user to pick an option:
+Rebuild on both `session_start` and `session_tree`. `session_tree` fires after
+`/tree` navigation changes the active branch; fork and resume instead arrive
+as `session_start` (with `reason: "fork"` / `"resume"`), so the same two
+handlers cover every path:
 
 ```ts
-pi.registerCommand("mode", {
-  description: "Pick a working mode",
-  handler: async (_args, ctx) => {
-    if (!ctx.hasUI) return;
-    const choice = await ctx.ui.select("Working mode", ["careful", "fast"]);
-    if (choice) ctx.ui.notify(`Mode: ${choice}`, "info");
-  },
+// Fragment, inside an existing extension: state, emptyState(), and MyState
+// are declared by your module.
+function rebuildState(ctx: ExtensionContext) {
+  state = emptyState();
+  for (const entry of ctx.sessionManager.getBranch()) {
+    if (entry.type !== "message") continue;
+    const msg = entry.message;
+    if (msg.role !== "toolResult" || msg.toolName !== "my_tool") continue;
+    const snapshot = msg.details as MyState | undefined;
+    if (snapshot) state = snapshot;
+  }
+}
+
+pi.on("session_start", async (_event, ctx) => rebuildState(ctx));
+pi.on("session_tree", async (_event, ctx) => rebuildState(ctx));
+```
+
+Reading the scan top to bottom: initialize empty in-memory state, walk the
+active branch from root to leaf, validate matching tool-result entries, and
+apply their snapshots in order so the last one becomes the current state. The
+shipped `todo.ts` extension
+(`packages/coding-agent/examples/extensions/todo.ts`) implements this loop end
+to end.
+
+**Failure mode:** scanning `getEntries()` (the whole session file) instead of
+`getBranch()` mixes in sibling branches; retaining old state incrementally
+after navigation mixes in the abandoned branch. Rebuild from the branch,
+wholesale, every time.
+
+**Verify:** `/reload`, `/resume`, `/fork`, and `/tree`-navigate; the rebuilt
+state must match the active branch on every path.
+
+### Serialize same-file mutations
+
+**Problem:** tool calls run in parallel by default. Your custom tool edits
+`foo.ts` while built-in `edit` also changes `foo.ts` in the same turn; both
+read the original, and whichever write lands last silently wins.
+
+**Recipe:** wrap the *entire* read-modify-write window in
+`withFileMutationQueue()`, the per-path async queue the built-in `edit` and
+`write` tools already use. Resolve the real target path first — relative to
+`ctx.cwd` — and use that same absolute path for the queue and every file
+operation (for existing files the helper canonicalizes through `realpath()`,
+so symlink aliases share one queue):
+
+```ts
+import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { readFile, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+
+// Fragment, inside a tool's execute():
+const absolutePath = resolve(ctx.cwd, params.path);
+
+await withFileMutationQueue(absolutePath, async () => {
+  const current = await readFile(absolutePath, "utf8");
+  await writeFile(absolutePath, update(current));
 });
 ```
 
-UI behavior depends on the mode, so the same dialog call behaves differently
-per host:
+**Verify:** ask the model to make two edits to the same file in one turn and
+confirm both land.
 
-| Mode | `notify()` | Dialogs (`select`, `confirm`, ...) |
-|---|---|---|
-| TUI | Fire-and-forget message | Wait for the user's response |
-| RPC | Emits a request the client may display or ignore | Emits a request and waits for the matching client response |
-| JSON / print | No-op | Return cancellation defaults (`false` or `undefined`) |
+### Messages, entries, and delivery modes
 
-Check `ctx.hasUI` before opening a dialog,
-and require `ctx.mode === "tui"` for components that need a terminal.
+**Problem:** you need to put something into the session — but the four options
+(model-visible message, transcript-only entry, queued mid-run injection)
+differ in who sees it and when it lands.
 
-Use a message renderer for a custom message created with `pi.sendMessage()`;
-that content participates in LLM context. Use an entry renderer for a custom
-entry created with `pi.appendEntry()`; that is durable transcript/UI state but
-does not reach the LLM. This is the key display-versus-context choice.
+**Recipe:** choose by visibility first, then by timing:
 
-### State, sessions, and queues
-
-In plain terms: this section answers two questions — *where should my state
-live?* and *how do I schedule a message around an agent that is already
-running?* The mechanics behind both are covered in
-[Sessions and durable context](#sec:sessions) and, for state, in
-[State that survives restart and branching](#state-that-survives-restart-and-branching)
-above; here the focus is choosing among the options.
-
-Where state lives:
-
-- **In-memory variables** vanish on reload, resume, fork, and restart. Use only
-  for caches you can rebuild.
-- **A tool result's `details`** is the right home for state derived from tool
-  actions; it follows the conversation branch naturally and is rebuilt with the
-  pattern above.
-- **`appendEntry()`** is for durable state that should be visible in the
-  transcript but never enter model context.
-- **`sendMessage()`** is for content the model *should* see. Never use it for
+- **`sendMessage()`** — a custom message the *model* sees. Never use it for
   private bookkeeping.
+- **`appendEntry()`** — durable state the model never sees. It renders in the
+  transcript only when paired with `pi.registerEntryRenderer()`; without one
+  it is invisible but still persisted.
+- **Message and entry renderers** — control how each looks on screen; the
+  model loop is unaffected either way.
 
-`pi.sendMessage()` injects a custom message into the session and accepts a
-`deliverAs` mode. The agent loop drains the queues at different points:
+For mid-run injection, `sendMessage()` accepts a `deliverAs` mode —
+`"steer"` (default), `"followUp"`, or `"nextTurn"`. The exact drain points of
+the three queues are lifecycle mechanics, covered in [Stage 4 of the prompt
+lifecycle](#sec:prompt-lifecycle); read that table first. The pattern-level
+guidance:
 
-| Mode | When it is applied | Effect on the active run |
-|---|---|---|
-| `steer` (default) | After the current assistant message and its tool batch finish, before the next AI-model request | Can re-enter the active multi-turn tool loop. Later steers and tool work still run before any `followUp`. |
-| `followUp` | Only when the agent is about to stop: no remaining tool calls and no pending steers | Starts another turn after that work would otherwise end. Already-queued steers, and the tools they cause, run first. |
-| `nextTurn` | With the *next* user-originated prompt | Never interrupts the active run and never starts one by itself. |
-
-```{mermaid}
-%%| label: fig-queue-drains
-%%| fig-cap: "Where each sendMessage queue drains in one agent run. steer messages land between the tool batch and the next model request; followUp messages land only when the run would otherwise stop; nextTurn messages wait for the next user prompt."
-sequenceDiagram
-  participant U as User / extension
-  participant A as Agent loop
-  participant M as AI model
-  U->>A: prompt
-  A->>M: request
-  M-->>A: assistant message + tool calls
-  A->>A: run tool batch
-  Note over A: steer queue drains here,<br/>before the next request
-  A->>M: next request (steers prepended)
-  M-->>A: final assistant message
-  Note over A: followUp queue drains here,<br/>when the run would stop
-  A-->>U: run idle
-  Note over U,A: nextTurn messages wait<br/>for the next user prompt
-```
-
-While the agent is idle, `sendMessage()` with `deliverAs: "steer"` or
-`"followUp"` still only appends unless you also pass
-[`triggerTurn: true`](#sec:glossary), which
-starts an AI-model turn immediately. `triggerTurn` is ignored for
-[`nextTurn`](#sec:glossary). A typical idle-host injection:
+- Use `"steer"` to redirect work in progress; `"followUp"` for work that
+  should start only after the current run would otherwise stop; `"nextTurn"`
+  to attach context to the next user-originated prompt without interrupting or
+  starting anything.
+- While the agent is idle, `"steer"` and `"followUp"` still only append unless
+  you also pass `triggerTurn: true`:
 
 ```ts
 pi.sendMessage(
@@ -422,67 +373,239 @@ pi.sendMessage(
 );
 ```
 
-`pi.sendUserMessage()` injects a genuine user message (not a custom one) and
-always starts or continues a turn:
+`pi.sendUserMessage()` injects a genuine user message and always starts or
+continues a turn; while streaming you must pass `deliverAs: "steer"` or
+`"followUp"` — omitting it throws. Do not start a second direct agent run from
+a hook; use these queues.
 
-- Idle: send immediately; `deliverAs` is not required.
-- Streaming: you must pass `deliverAs: "steer"` or `"followUp"` (same queue
-  timings as above). Omitting it throws. `nextTurn` is not available here.
+**Verify:** call the `ci-watch` injection from a command handler while idle,
+then again without `triggerTurn`, and observe the difference.
 
-Do not start a second direct agent run from a hook; use these queues.
+## Tier 3 — Compose and evolve
 
-For exact event shapes, use the [extension event reference](#sec:events).
+### Active-tool policy {#dynamic-tools-and-active-tool-policy}
 
-## Tier 3 - Advanced: configuration and packaging
+**Problem:** you want different tool sets for different working modes (for
+example read-only review versus full editing).
 
-Pi configuration is layered. Read the layers from broadest to narrowest:
-
-1. built-in defaults
-2. global settings under `~/.pi/agent`
-3. project settings under `.pi`
-4. command-line flags and environment overrides
-5. extension behavior that reacts at runtime
-
-Narrower layers win. If `~/.pi/agent/settings.json` sets `"theme": "dark"` and
-the project's `.pi/settings.json` sets `"theme": "light"`, a session in that
-project uses `light` — and a `--theme` CLI flag would override both for that
-invocation. When a setting "does not apply", check which layer set the value
-you are actually getting.
-
-By default, the coding-agent package uses `~/.pi/agent` as its global agent
-directory and `.pi` for project-local resources. The `piConfig.configDir`
-package setting makes the config directory rebrandable, so extension code should
-import `CONFIG_DIR_NAME` when constructing a project path instead of hardcoding
-`.pi` (`CONFIG_DIR_NAME` resolves to `.pi` by default):
+**Recipe:** `pi.registerTool()` works after startup, and
+`pi.setActiveTools()` changes what the model can call next turn. Build on the
+current selection rather than replacing it blindly:
 
 ```ts
-import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
-import { join } from "node:path";
-
-const projectConfigPath = join(ctx.cwd, CONFIG_DIR_NAME, "my-extension.json");
+const active = pi.getActiveTools();
+pi.setActiveTools([...new Set([...active, "my_tool"])]);
 ```
 
-Use settings for stable choices such as providers, model selection, themes,
-keybindings, trusted packages, and resource locations. Use an extension when a
-choice must react to events, require a tool, retain state, or manipulate UI.
+**Failure mode:** `setActiveTools(["read", "bash"])` is a real model-policy
+change — it rebuilds the system prompt and removes capabilities — not a UI
+filter. Surface it through a command or shortcut that clearly signals the new
+mode. Command handlers receive `ExtensionCommandContext`, which adds
+session-changing methods (`newSession`, `fork`, `navigateTree`,
+`switchSession`, `reload`, `waitForIdle`); those exist only in commands
+because calling them from an ordinary event handler can deadlock inside the
+active agent loop.
 
-Project configuration and resources are an execution boundary. Consider the
-scenario: you clone an unfamiliar repository and it ships
-`.pi/extensions/index.ts` — code that would run with Pi's full permissions the
-moment it loads. [Trust](#sec:glossary) is the per-folder decision that
-controls whether that happens. Before trust is
-resolved, Pi loads only context files plus global and explicitly supplied CLI
-extensions. Approving trust allows protected project settings and resources to
-load; declining trust skips them. Trust is an input-loading decision, not a
-sandbox for subsequent tool execution. A global extension should call
-`ctx.isProjectTrusted()` before honoring project-local configuration of its own.
+### Dynamic tool loading: register many, activate few
 
-### Package a team customization
+**Problem:** your extension ships dozens of tools, but sending every schema on
+every request wastes context and confuses tool choice.
 
-Keep package sharing explicit and small. Project packages remain trust-gated;
-use a global package for behavior independent of the current project. A
-minimal [package](#sec:glossary) is a directory with a `package.json` that
-declares its resource directories in a `pi` manifest:
+**Recipe:** register all tools up front, keep only a small **loader tool**
+active, and let it activate relevant tools mid-turn. When the change is purely
+additive, Pi records the added names on the loader's tool result and exposes
+their definitions before the next model request — with native deferred loading
+on models that support it, and the normal active-tool list otherwise.
+
+```ts
+// Fragment, inside the factory: SEARCHABLE_TOOL_NAMES is your set of
+// initially-inactive tools; loader execution computed `matches`.
+pi.on("session_start", () => {
+  // Keep searchable tools registered but inactive; preserve built-ins and
+  // other extensions' tools; keep the loader itself active.
+  const initial = pi.getActiveTools().filter((n) => !SEARCHABLE_TOOL_NAMES.has(n));
+  pi.setActiveTools([...new Set([...initial, "search_tools"])]);
+});
+
+// Inside the loader tool's execute():
+const active = pi.getActiveTools();
+const added = matches.filter((name) => !active.includes(name));
+pi.setActiveTools([...new Set([...active, ...added])]);
+```
+
+The contract: additive changes only (removals work but forfeit deferred
+loading and can invalidate the provider's cached prompt prefix), and lazily
+loaded tools should rely on their `description` alone — activating a tool with
+`promptSnippet`/`promptGuidelines` rebuilds the system prompt, which
+invalidates the prefix even when the provider supports deferred schemas. The
+official documentation has a complete `search_tools` example; the shipped
+`dynamic-tools.ts` covers the simpler command-driven case.
+
+### Session replacement without stale contexts
+
+**Problem:** `ctx.newSession()`, `ctx.fork()`, `ctx.switchSession()`, and
+`ctx.reload()` tear down the current runtime and spin up a new one. Your
+handler keeps running in the old call frame, but every captured session-bound
+object — `ctx.sessionManager`, `pi`, anything your `session_shutdown` handler
+invalidated — now belongs to a dead runtime and will throw or misbehave.
+
+**Recipe:** do post-replacement work in the `withSession` callback, which
+receives a fresh context bound to the replacement session, and capture only
+plain data (strings, ids, serialized config) into it:
+
+```ts
+pi.registerCommand("handoff", {
+  description: "Continue the task in a fresh session",
+  handler: async (_args, ctx) => {
+    const kickoff = "Continue from the previous session: ..."; // plain data
+    await ctx.newSession({
+      withSession: async (newCtx) => {
+        // Use only newCtx here — never the captured ctx or pi.
+        await newCtx.sendUserMessage(kickoff);
+      },
+    });
+  },
+});
+```
+
+Treat `await ctx.reload()` as terminal for its handler: `return` immediately
+after it, and put post-reload behavior in the newly loaded instance (for
+example a `session_start` handler). The official documentation's "Session
+replacement lifecycle and footguns" section has the full safe/unsafe
+comparison.
+
+**Verify:** call the command, then confirm the kickoff message appears in the
+*new* session and no errors reference the old context.
+
+### Inter-extension events with a clean lifecycle
+
+**Problem:** one extension produces state another consumes, and neither should
+import the other.
+
+**Recipe:** `pi.events` is a shared event bus. Namespace your event names so
+packages from different authors cannot collide — and manage the subscription
+lifecycle, because the bus survives `/reload` while your extension instance
+does not:
+
+```ts
+let unsubscribe: (() => void) | undefined;
+
+pi.on("session_start", () => {
+  unsubscribe?.(); // defensive: drop any prior subscription
+  unsubscribe = pi.events.on("my-ext:indexed", (data) => {
+    // Handle the event.
+  });
+});
+
+pi.on("session_shutdown", () => {
+  unsubscribe?.();
+  unsubscribe = undefined;
+});
+
+// Elsewhere (any extension): pi.events.emit("my-ext:indexed", { count: 17 });
+```
+
+**Failure mode:** `pi.events.on()` returns an unsubscribe function. If you
+never call it, every `/reload` adds another listener from the old instance, so
+handlers fire multiple times with stale closures. Events are also ephemeral —
+not persisted, not replayed — and `emit()` does not await asynchronous
+listeners, so never use the bus for state that must survive or be
+acknowledged.
+
+**Verify:** emit once, `/reload`, emit again, and confirm the handler fires
+exactly once per event.
+
+### Backward-compatible arguments with prepareArguments
+
+**Problem:** you tightened a tool's schema, and now resuming an old session
+fails because a stored tool call's arguments no longer validate.
+
+**Recipe:** `prepareArguments(args)` runs *before* schema validation and
+before `execute()`. Fold legacy shapes into the modern one there, and strip
+the legacy fields so what remains is exactly the current schema. Do not add
+deprecated compatibility fields to `parameters` — that also teaches the model
+the legacy shape.
+
+```ts
+pi.registerTool({
+  name: "edit",
+  label: "Edit",
+  description: "Edit a single file using exact text replacement",
+  parameters: Type.Object({
+    path: Type.String(),
+    edits: Type.Array(
+      Type.Object({ oldText: Type.String(), newText: Type.String() }),
+    ),
+  }),
+  prepareArguments(args) {
+    if (!args || typeof args !== "object") return args;
+    const { oldText, newText, ...rest } = args as {
+      oldText?: unknown; newText?: unknown;
+      edits?: Array<{ oldText: string; newText: string }>;
+    };
+    if (typeof oldText !== "string" || typeof newText !== "string") {
+      return args; // nothing to shim; validation will judge it
+    }
+    // Modern shape only: legacy fields folded in and removed.
+    return { ...rest, edits: [...(rest.edits ?? []), { oldText, newText }] };
+  },
+  async execute(_id, params) {
+    return {
+      content: [{ type: "text", text: `Applying ${params.edits.length} edit(s)` }],
+      details: {},
+    };
+  },
+});
+```
+
+**Verify:** resume a session containing a legacy-shape call and confirm it
+validates and executes.
+
+### Override a built-in tool
+
+**Problem:** you need `read`, `bash`, or another built-in to behave
+differently for every model call — redact secrets from `read` output, route
+`bash` through a sandbox.
+
+**Recipe:** register a tool with the same name. Three contracts keep the
+override invisible to the rest of Pi:
+
+1. **Preserve the built-in result shape**, including the `details` type — the
+   UI and session logic depend on it, or transcripts and renderers break in
+   non-obvious ways.
+2. **Renderer inheritance is per slot**: if your override omits `renderCall`,
+   Pi reuses the built-in `renderCall`; same for `renderResult`. Omit both and
+   the built-in UI (syntax highlighting, diffs) keeps working.
+3. **Prompt metadata is not inherited** — redefine `promptSnippet` and
+   `promptGuidelines` if the override should keep them.
+
+The built-in implementations and their `*ToolDetails` types are listed in the
+official documentation, and `tool-override.ts` is a complete `read` override
+with logging and access control. Built-in tools also accept pluggable
+`operations` (`ReadOperations`, `BashOperations`, ...) for remote execution —
+the shipped `ssh.ts` example shows the pattern — and `user_bash` can route the
+interactive `!`/`!!` shell through the same backends.
+
+**Failure mode:** prefer a `tool_call` hook (Tier 1) when blocking or
+observing is enough; override only when the result itself must change.
+
+**Verify:** confirm the transcript renders exactly as before for overridden
+calls, then confirm the new behavior.
+
+## Deploy and share
+
+Pi configuration is layered — built-in defaults, global settings under
+`~/.pi/agent`, project settings under `.pi`, CLI flags and environment, then
+extension behavior at runtime — and narrower layers win. When a setting "does
+not apply", check which layer set the value you are actually getting. Use
+`CONFIG_DIR_NAME` instead of hardcoding `.pi` when constructing project paths
+(rebranded distributions can rename it), and call `ctx.isProjectTrusted()`
+before honoring project-local configuration of your own — trust is an
+input-loading decision, not a sandbox for subsequent tool execution.
+[Resources, settings, and trust](#sec:resources) is the canonical guide.
+
+A minimal shareable [package](#sec:glossary) is a directory with a
+`package.json` declaring its resources in a `pi` manifest:
 
 ```json
 {
@@ -497,49 +620,39 @@ declares its resource directories in a `pi` manifest:
 }
 ```
 
-The
-manifest fields, dependency placement, install commands, and publishing steps
-are covered in [Packaging and sharing extensions](#sec:packages); see
-[Resources, settings, and trust](#sec:resources), the canonical guide to
-resource discovery, package manifests, and trust semantics, before distributing
-a package.
+Manifest fields, dependency placement, install commands, and publishing steps
+are in [Packaging and sharing extensions](#sec:packages).
 
-## Route provider and custom-UI work to its canonical chapter
+Provider configuration can expose credentials: keep API keys in environment
+references and never log headers, payloads, or system-prompt options. For
+`pi.registerProvider()` and provider internals, see [Models, providers, and
+authentication](#sec:models); for custom components, editors, and keybindings,
+see [Terminal UI and interactive mode](#sec:tui) — never hardcode a raw key
+check in extension code.
 
-This production chapter deliberately stops at the extension-facing contract:
+### Pattern-specific mistakes
 
-- For `pi.registerProvider()`, proxy endpoints, model catalogs, OAuth, or
-  provider-request hooks, continue to [Models, providers, and authentication](#sec:models).
-  Its custom-provider section is the canonical destination; do not copy
-  provider internals into an extension pattern.
-- For custom components, editors, renderers, and keybinding behavior, continue
-  to [Terminal UI and interactive mode](#sec:tui). Never hardcode a raw key
-  check in extension code; register a default through the configurable
-  keybindings described there. The safety gate above remains the required
-  noninteractive fallback before adding a UI surface.
-
-Provider configuration can expose credentials. Keep API keys in environment
-references and never log headers, payloads, or system-prompt options. These
-links are optional follow-ups: the safety, state, concurrency, and verification
-patterns in this chapter do not require provider or TUI internals.
-
-## Common mistakes and the correct boundary
+General first-extension pitfalls (loading, naming, discovery) are in [Your
+first extension](#sec:extensions); exact event contracts are in the [Extension
+event reference](#sec:events). This table keeps only mistakes tied to this
+chapter's patterns:
 
 | Mistake | Why it fails | Better approach |
 |---|---|---|
-| Start a file watcher in the extension factory | Factory may run for a non-session command | Start in `session_start`; close in `session_shutdown` (see [State that survives restart and branching](#state-that-survives-restart-and-branching)) |
-| Keep all extension state in a closure | Reload/resume/fork loses it | Rebuild from session entries or tool `details` (see [State that survives restart and branching](#state-that-survives-restart-and-branching)) |
-| Call session replacement from a normal event | It can run inside the active agent loop and leave stale contexts | Use a command and `ExtensionCommandContext` (see [Dynamic tools and active-tool policy](#dynamic-tools-and-active-tool-policy)) |
-| Use `sendMessage` for private metadata | The model receives it | Use `appendEntry` and an entry renderer (see [State, sessions, and queues](#state-sessions-and-queues)) |
-| Ignore `AbortSignal` | Esc cannot stop your nested work | Forward `ctx.signal`/tool signal (see [Tools: make the contract for the AI model explicit](#tools-make-the-contract-for-the-ai-model-explicit)) |
-| Mutate files in a custom tool without a queue | Parallel sibling calls can lose writes | Use `withFileMutationQueue` around read-modify-write (see [Tools: make the contract for the AI model explicit](#tools-make-the-contract-for-the-ai-model-explicit)) |
-| Override `read` or `bash` with a different result shape | Built-in UI/session behavior expects details | Preserve the documented built-in contract (see [Tools: make the contract for the AI model explicit](#tools-make-the-contract-for-the-ai-model-explicit)) |
+| Keep all extension state in a closure | Reload/resume/fork loses it | Rebuild from the active branch ([durable state](#state-that-survives-restart-and-branching)) |
+| Use `sendMessage` for private metadata | The model receives it | `appendEntry` (+ entry renderer if it should render) |
+| Use captured `ctx`/`pi`/`sessionManager` after replacement | They belong to the torn-down runtime | `withSession` with plain captured data ([session replacement](#session-replacement-without-stale-contexts)) |
+| Ignore `AbortSignal` in a tool | Esc cannot stop your nested work | Forward `signal` ([robust tool](#a-robust-custom-tool)) |
+| Mutate a file without the queue | Parallel siblings lose writes | `withFileMutationQueue` around the whole window ([file queue](#serialize-same-file-mutations)) |
+| Change the built-in result shape in an override | UI/session code depends on it | Preserve the documented `details` contract ([override](#override-a-built-in-tool)) |
+| Subscribe to `pi.events` without unsubscribing | Every `/reload` adds a stale listener | Unsubscribe in `session_shutdown` ([events](#inter-extension-events-with-a-clean-lifecycle)) |
+| Activate lazy tools with prompt metadata | System-prompt rebuild invalidates the cache prefix | Description-only lazy tools ([dynamic loading](#dynamic-tool-loading-register-many-activate-few)) |
 | Assume tool hooks observe sibling results | Parallel tools finish independently | Persist/coordinate after the batch or avoid the dependency |
-| Assume `agent_end` means completely idle | `agent_end` marks one agent loop ending; retry, compaction, or a queued continuation may still run | Use `agent_settled`, which fires only after no automatic retry, compaction, or queued continuation remains, or command `waitForIdle()` (see [Prompt lifecycle](#sec:prompt-lifecycle)) |
-| Write to stdout with `console.log` | In print, JSON, and RPC modes stdout carries machine-readable output; stray writes corrupt it | Use the debug log; see [Run modes and SDK embedding](#sec:modes) |
-| Test only `pi -e` | It does not prove discovery/reload behavior | Test from auto-discovery plus `/reload` (see [A practical verification ladder](#a-practical-verification-ladder)) |
+| Assume `agent_end` means completely idle | Retry, compaction, or queued work may still run | Use `agent_settled` or `waitForIdle()` ([prompt lifecycle](#sec:prompt-lifecycle)) |
+| Write to stdout with `console.log` | It corrupts print, JSON, and RPC output | Use notifications or the debug log ([run modes](#sec:modes)) |
+| Test only `pi -e` | It does not prove discovery/reload behavior | Auto-discovery plus `/reload` ([verification ladder](#a-practical-verification-ladder)) |
 
-## A practical verification ladder
+### A practical verification ladder {#a-practical-verification-ladder}
 
 Use evidence appropriate to what you changed:
 
@@ -565,7 +678,7 @@ Use evidence appropriate to what you changed:
    faux-provider harness is also the practical way to test an extension's
    behavior without real API keys.
 
-The repository ships extension examples in the directory
+The repository ships extension examples in
 `packages/coding-agent/examples/extensions/`. Start with the smallest match:
 
 - `hello.ts`: a tool
@@ -577,12 +690,17 @@ The repository ships extension examples in the directory
 
 ## Try it
 
-1. Run the safety-gate snippet from Tier 1 and test both the allow and deny
-   paths, as described in that section's checkpoint.
-2. Take an extension you wrote for
-   [Your first extension](#sec:extensions) and move any durable state onto the
-   rebuild pattern from Tier 2; then walk the verification ladder steps 1–6
-   and note which step first catches a real bug.
-3. Write a `ci-watch`-style extension that calls `pi.sendMessage(..., { deliverAs: "steer", triggerTurn: true })`
-   from a command handler. Predict — then observe — the difference when you
-   omit `triggerTurn` while the agent is idle.
+1. **(Tier 1)** Run the safety-gate recipe and test all three paths: dialog
+   approve, dialog deny, and the no-UI fallback under `pi -p`. Then shorten
+   the confirm timeout to 2 seconds and confirm the gate denies on timeout
+   rather than hanging.
+2. **(Tier 2)** Take the extension you wrote for [Your first
+   extension](#sec:extensions) and move its counter onto the branch-aware
+   rebuild pattern; then `/fork`, `/tree`-navigate back, and verify the state
+   matches the active branch on every path.
+3. **(Tier 3)** Write a `ci-watch`-style extension that calls
+   `pi.sendMessage(..., { deliverAs: "steer", triggerTurn: true })` from a
+   command handler, and a second extension that listens for a
+   `ci-watch:fired` event on `pi.events`. `/reload` twice, fire the command,
+   and confirm the listener ran exactly once — if it ran more than once, your
+   unsubscribe lifecycle is missing.

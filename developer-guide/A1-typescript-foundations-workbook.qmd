@@ -3030,7 +3030,7 @@ data looks like; it never fills in missing values for you.
 
 For string literals inside a tool contract, prefer the helper Pi ships for
 provider compatibility: `StringEnum([...])` instead of hand-written
-`Type.Union` of literals. [Your first extension](07-your-first-extension.qmd#stringenum-vs-typeunion-for-string-literals)
+`Type.Union` of literals. [Extension patterns](08-extension-patterns.qmd#stringenum-vs-typeunion-for-string-literals)
 explains the difference and the schema policy.
 
 #### Reporting why a value failed: `Value.Errors`
