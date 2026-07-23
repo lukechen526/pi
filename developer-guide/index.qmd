@@ -15,7 +15,7 @@ work:
 
 | Intent | Route |
 |---|---|
-| **Build a first extension** | [Setup](#quick-start) → [the runnable extension](07-your-first-extension.qmd#a-complete-first-extension) → [extension patterns](#sec:customization) |
+| **Build a first extension** | [Setup](#quick-start) → [resources, settings, and trust](#sec:resources) → [your first extension](#sec:extensions) → [the lifecycle map](#sec:prompt-lifecycle) → [extension patterns](#sec:customization) |
 | **Contribute to core** | [quick Pi TypeScript](#sec:typescript) → [architecture](#sec:architecture) → [prompt lifecycle](#sec:prompt-lifecycle) → [agent core](#sec:agent-core) → [built-in tools](#sec:tools) → [testing and contribution](#sec:testing) |
 | **Embed or automate Pi** | [architecture](#sec:architecture) → [models and authentication](#sec:models) → [modes and SDK](#sec:modes) → [failure and recovery](#sec:failure) |
 | **Customize without code** | [sessions and compaction](#sec:sessions) → [settings, skills, prompts, and themes](#sec:resources) |
@@ -27,17 +27,16 @@ complete beginner route that returns to the shorter Pi chapter after the
 foundations.
 
 ::: {.callout-tip title="First success in 10–15 minutes"}
-Use the canonical [complete first extension](07-your-first-extension.qmd#a-complete-first-extension)
+Use the staged [first extension](07-your-first-extension.qmd#a-complete-first-extension)
 rather than copying a second example into this index.
 
-1. Create the discovered location and save the linked `hello-pi.ts` listing:
+1. Create the discovered location and save the stage-1 `hello-pi.ts` listing:
    `mkdir -p ~/.pi/agent/extensions`.
-2. From a terminal with Pi available, run
-   `pi -e ~/.pi/agent/extensions/hello-pi.ts`.
-3. **Visible success:** Pi shows `hello-pi extension is ready`; run
-   `/hello-pi Ada` and see the greeting notification.
-4. Edit the file, run `/reload`, and confirm the startup notification appears
-   again. Reload tears down and creates the extension runtime.
+2. Start `pi` in any project, run `/hello-pi Ada`, and see the greeting
+   notification.
+3. Work through stages 2-4 in the chapter, running `/reload` after each edit.
+   Reload tears down and recreates the extension runtime; the stage-4 counter
+   proves durable state survives it.
 5. **Cleanup:** remove `~/.pi/agent/extensions/hello-pi.ts` when finished.
 
 Extensions run with the permissions of the Pi process. Read the file before
