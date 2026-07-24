@@ -337,6 +337,69 @@ end.
 **Cleanup when you are done:** remove `~/.pi/agent/extensions/hello-pi.ts`,
 then `/reload`.
 
+## Every event an extension can hook
+
+[The prompt lifecycle](#sec:prompt-lifecycle) showed *when* each event fires.
+This section is the other half: **what your handler can do at each point.**
+It is the reference version of the mental model from earlier — come back to it
+whenever you need to pick a hook.
+
+### Three kinds of hooks
+
+Every hook is one of three kinds. **Notification** hooks observe; their
+return values are ignored. **Transform** hooks return or mutate a value Pi
+then uses. **Gate** hooks can cancel, block, or take over the operation
+entirely. Handlers for the same event run in extension load order, and where
+a value chains — the system prompt, input transforms, `tool_call` input
+mutations, `tool_result` patches — each handler sees the previous handler's
+output.
+
+### The complete catalog
+
+Every event an extension can subscribe to with `pi.on()`, grouped by where it
+fires in the lifecycle and listed in firing order:
+
+| Event | When it fires | Kind | What a handler can do |
+|------------------------|------------------|-----------|--------------------------|
+| **Startup** | | | |
+| `project_trust` | Before project resources load | Gate | Return `yes`/`no`/`undecided`; first yes/no wins |
+| `session_start` | Session opened, reloaded, or replaced | Notify | Initialize resources; rebuild state |
+| `resources_discover` | After `session_start` | Transform | Return skill/prompt/theme paths |
+| **Prompt preparation** | | | |
+| `input` | Raw text, before skill/template expansion | Gate | `continue`, `transform`, or `handled` |
+| `before_agent_start` | After input, before the loop | Transform | Inject a message; chain the system prompt |
+| `agent_start` | Low-level run begins | Notify | |
+| **Each turn** | | | |
+| `turn_start` / `turn_end` | Bracket one model request + tool batch | Notify | Measure turns; `turn_end` carries `toolResults` |
+| `message_start`/`message_end` | User message submitted | Notify | |
+| `context` | Before every provider request | Transform | Return a replacement message list |
+| `before_provider_headers` | Headers assembled; once per request | Transform | Mutate headers in place (`null` deletes) |
+| `before_provider_request` | Payload serialized, before send | Transform | Return a replacement payload |
+| `after_provider_response` | Response received, before stream consumed | Notify | Observe status and headers |
+| `message_start`/`update`/`end` | Assistant streaming output | Both | Observe deltas; `message_end` may replace the message |
+| `tool_execution_start` | Tool call validated | Notify | |
+| `tool_call` | Before execution | Gate | `{ block: true, reason }`; mutate `event.input` |
+| `tool_execution_update` | Tool progress | Notify | Render progress |
+| `tool_result` | After execution, before append | Transform | Return partial patches (chained) |
+| `tool_execution_end` | Tool finalized (completion order) | Notify | |
+| **Run end** | | | |
+| `agent_end` | Low-level loop stopped | Notify | `event.messages` from this run |
+| `agent_settled` | No retry, compaction, or queued work left | Notify | True-idle signal |
+| **Other paths** | | | |
+| `session_before_switch` / `_fork` / `_compact` / `_tree` | Before the named session operation | Gate | `{ cancel: true }`; compact/tree accept custom summaries |
+| `session_shutdown` | Before teardown (exit, reload, replace) | Notify | Clean up session-bound resources |
+| `session_compact` / `session_tree` | Compaction or navigation completed | Notify | Rebuild branch-dependent state |
+| `session_info_changed` | `/name` or `setSessionName()` | Notify | Update UI |
+| `model_select` / `thinking_level_select` | Model or thinking level changed | Notify | Update per-model UI/state |
+| `user_bash` | `!` / `!!` shell command | Gate | Supply a backend, wrap, or answer directly |
+
+**Both** means the row mixes notification and transform behavior. Exact
+payloads and return shapes for every event are in the [Extension event
+reference](#sec:events) and the official [Extensions
+documentation](https://pi.dev/docs/latest/extensions#events); runnable
+recipes that put these hooks to work are in [Extension
+patterns](#sec:customization).
+
 ## Host safety: UI calls outside the terminal
 
 Stage 1 worked because you were in the TUI. The same UI call behaves
