@@ -41,74 +41,67 @@ answer. The path below explains what stays the same in both examples.
 
 This is every extension event, in the order Pi emits it, grouped by phase.
 The prompt loop in the middle repeats for every prompt; the session-operation
-paths at the bottom branch off between prompt loops.
+paths at the bottom branch off between prompt loops. Events marked **[gate]**
+can cancel, block, or take over; events marked **[transform]** return or
+mutate a value Pi then uses; unmarked events are notification-only.
 
-```text
-pi starts
-  │
-  ├─ user/global and CLI (-e) extension factories load
-  │  (async factories awaited before startup continues)
-  ├─► project_trust              (user/global and CLI extensions only)
-  ├─ project-local extensions and resources load (if trusted)
-  ├─► session_start { reason: "startup" }
-  └─► resources_discover { reason: "startup" }
-      │
-      ▼
-user sends prompt ───────────────────────────────────────────┐
-  │                                                          │
-  ├─ (extension commands checked first; a match bypasses)    │
-  ├─► input                     (continue / transform / handle)
-  ├─ (skill and template expansion, if not handled)          │
-  ├─► before_agent_start        (inject message, adjust system prompt)
-  ├─► agent_start                                            │
-  │   ┌─── turn (repeats while the model calls tools) ───┐   │
-  │   ├─► turn_start                                     │   │
-  │   ├─► message_start / message_end   (user message)   │   │
-  │   ├─► context                 (replace message list) │   │
-  │   ├─► before_provider_headers (mutate headers)       │   │
-  │   ├─► before_provider_request (inspect/replace payload)  │
-  │   ├─► after_provider_response (status + headers)     │   │
-  │   ├─► message_start / message_update / message_end   │   │
-  │   │   (assistant streaming)                          │   │
-  │   │   tool calls:                                    │   │
-  │   │     ├─► tool_execution_start                     │   │
-  │   │     ├─► tool_call         (block or mutate)      │   │
-  │   │     ├─► tool_execution_update                    │   │
-  │   │     ├─► tool_result       (patch the result)     │   │
-  │   │     ├─► tool_execution_end                       │   │
-  │   │     └─► message_start / message_end              │   │
-  │   │       (finalized toolResult messages)            │   │
-  │   └─► turn_end                                       │   │
-  ├─► agent_end                     (low-level loop stopped)
-  │     …maybe retry, compact-and-retry, or queued       │
-  │      continuation, then more agent_start/agent_end   │
-  └─► agent_settled                 (nothing automatic left)
-                                                           │
-user sends another prompt ◄────────────────────────────────┘
-
-other paths, taken between prompt loops (unless noted):
-  /new or /resume   session_before_switch (can cancel)
-                    → session_shutdown → session_start
-                      { reason: "new" | "resume" } → resources_discover
-                      { reason: "startup" }
-  /fork or /clone   session_before_fork (can cancel)
-                    → session_shutdown → session_start
-                      { reason: "fork" } → resources_discover
-                      { reason: "startup" }
-  /compact          session_before_compact (can cancel or supply summary)
-                    → session_compact
-                    (automatic compaction instead fires during recovery,
-                     between agent_end and the retry — see Stage 9)
-  /tree navigation  session_before_tree (can cancel or supply summary)
-                    → session_tree
-  /name             session_info_changed
-  /model, Ctrl+P    thinking_level_select (if the change clamps the level)
-                    → model_select
-  thinking change   thinking_level_select
-  ! / !! commands   user_bash (can intercept or replace execution)
-  exit (Ctrl+C, Ctrl+D, SIGHUP, SIGTERM)
-                    session_shutdown
+```{mermaid}
+%%| label: fig-extension-lifecycle-map
+%%| fig-cap: "Map 1: the extension event lifecycle spine. The table below lists every event on each segment."
+%%| fig-width: 4.6
+%%| fig-pos: "H"
+%%{init: {"flowchart": {"nodeSpacing": 16, "rankSpacing": 22}, "themeVariables": {"fontSize": "12px"}}}%%
+flowchart TD
+  S["<b>1 · Startup</b><br/>load, trust, session_start"]:::phase
+  P["<b>2 · Prompt preparation</b><br/>input → agent_start"]:::phase
+  T["<b>3 · Turn loop</b><br/>repeats while tools are called"]:::phase
+  E["<b>4 · Run end</b><br/>agent_end → agent_settled"]:::phase
+  O["<b>Other paths</b><br/>session ops, model, user_bash, exit"]:::phase
+  S --> P --> T --> E
+  E -.-> O
+  classDef phase fill:#eef3f9,stroke:#2f5b8f,color:#000000
 ```
+
+Every extension event, grouped by the spine segment where it fires and listed
+in firing order. **Kind** uses the vocabulary from [How to read the
+map](#how-to-read-the-map): gates can cancel or block, transforms return or
+mutate a value Pi then uses, notifications are observe-only; **Both** means
+the row mixes notification and transform behavior. Exact payloads
+and return shapes are in the [Extension event reference](#sec:events).
+
+| Event | When it fires | Kind | What a handler can do |
+|------------------------|------------------|-----------|--------------------------|
+| **Startup** | | | |
+| `project_trust` | Before project resources load | Gate | Return `yes`/`no`/`undecided`; first yes/no wins |
+| `session_start` | Session opened, reloaded, or replaced | Notify | Initialize resources; rebuild state |
+| `resources_discover` | After `session_start` | Transform | Return skill/prompt/theme paths |
+| **Prompt preparation** | | | |
+| `input` | Raw text, before skill/template expansion | Gate | `continue`, `transform`, or `handled` |
+| `before_agent_start` | After input, before the loop | Transform | Inject a message; chain the system prompt |
+| `agent_start` | Low-level run begins | Notify | |
+| **Each turn** | | | |
+| `turn_start` / `turn_end` | Bracket one model request + tool batch | Notify | Measure turns; `turn_end` carries `toolResults` |
+| `message_start`/`message_end` | User message submitted | Notify | |
+| `context` | Before every provider request | Transform | Return a replacement message list |
+| `before_provider_headers` | Headers assembled; once per request | Transform | Mutate headers in place (`null` deletes) |
+| `before_provider_request` | Payload serialized, before send | Transform | Return a replacement payload |
+| `after_provider_response` | Response received, before stream consumed | Notify | Observe status and headers |
+| `message_start`/`update`/`end` | Assistant streaming output | Both | Observe deltas; `message_end` may replace the message |
+| `tool_execution_start` | Tool call validated | Notify | |
+| `tool_call` | Before execution | Gate | `{ block: true, reason }`; mutate `event.input` |
+| `tool_execution_update` | Tool progress | Notify | Render progress |
+| `tool_result` | After execution, before append | Transform | Return partial patches (chained) |
+| `tool_execution_end` | Tool finalized (completion order) | Notify | |
+| **Run end** | | | |
+| `agent_end` | Low-level loop stopped | Notify | `event.messages` from this run |
+| `agent_settled` | No retry, compaction, or queued work left | Notify | True-idle signal |
+| **Other paths** | | | |
+| `session_before_switch` / `_fork` / `_compact` / `_tree` | Before the named session operation | Gate | `{ cancel: true }`; compact/tree accept custom summaries |
+| `session_shutdown` | Before teardown (exit, reload, replace) | Notify | Clean up session-bound resources |
+| `session_compact` / `session_tree` | Compaction or navigation completed | Notify | Rebuild branch-dependent state |
+| `session_info_changed` | `/name` or `setSessionName()` | Notify | Update UI |
+| `model_select` / `thinking_level_select` | Model or thinking level changed | Notify | Update per-model UI/state |
+| `user_bash` | `!` / `!!` shell command | Gate | Supply a backend, wrap, or answer directly |
 
 Session replacement (`/new`, `/resume`, `/fork`, and also `/reload`) tears the
 old extension instance down completely: `session_shutdown` fires, extensions
@@ -120,16 +113,13 @@ in the current process.
 
 ## How to read the map
 
-Every hook is one of three kinds. **Notification** hooks (`session_start`,
-`agent_end`, `message_update`, `model_select`, ...) observe; their return
-values are ignored. **Transform** hooks (`input`, `context`,
-`before_agent_start`, `tool_result`, the provider-request pair) return or
-mutate a value Pi then uses. **Gate** hooks (`project_trust`,
-`session_before_*`, `tool_call`, `user_bash`) can cancel, block, or take over
-the operation entirely. Handlers for the same event run in extension load
-order, and where a value chains — the system prompt, input transforms,
-`tool_call` input mutations, `tool_result` patches — each handler sees the
-previous handler's output. The exact payload and return contract of every
+Every hook is one of three kinds. **Notification** hooks observe; their
+return values are ignored. **Transform** hooks return or mutate a value Pi
+then uses. **Gate** hooks can cancel, block, or take over the operation
+entirely. Handlers for the same event run in extension load order, and where
+a value chains — the system prompt, input transforms, `tool_call` input
+mutations, `tool_result` patches — each handler sees the previous handler's
+output. The exact payload and return contract of every
 event is in the [Extension event reference](#sec:events) and the official
 [Extensions documentation](https://pi.dev/docs/latest/extensions#events).
 
@@ -155,14 +145,17 @@ because the model calls `read`, then `bash`, then answers.
 ```{mermaid}
 %%| label: fig-prompt-lifecycle-overview
 %%| fig-cap: "The complete prompt path. Startup precedes the loop; prompt and tool assembly precede the repeated provider/tool cycle; persistence is a side lane; settlement closes the run."
-flowchart TD
-  S0["1. Startup, trust,<br/>resources"]:::input
-  S1["2-4. Input, interception,<br/>and run construction"]:::input
-  S5["5. One model turn:<br/>context, provider, stream"]:::turn
-  S6["6. Validate and execute tools"]:::turn
-  S7{"7. Continue this run?"}
-  S8["8. Persistence side lane<br/>(throughout)"]:::settle
-  S9["9. Recovery and settlement"]:::settle
+%%| fig-pos: "H"
+%%| fig-width: 6.3
+%%{init: {"flowchart": {"nodeSpacing": 18, "rankSpacing": 24}, "themeVariables": {"fontSize": "12px"}}}%%
+flowchart LR
+  S0["1. Startup,<br/>trust, resources"]:::input
+  S1["2-4. Input and<br/>run construction"]:::input
+  S5["5. Model turn:<br/>context, provider,<br/>stream"]:::turn
+  S6["6. Tools:<br/>validate, gate,<br/>execute"]:::turn
+  S7{"7. Continue<br/>this run?"}
+  S8["8. Persistence<br/>(side lane)"]:::settle
+  S9["9. Recovery<br/>and settlement"]:::settle
   S0 --> S1 --> S5 --> S6 --> S7
   S7 -->|"yes"| S5
   S7 -->|"no"| S9
@@ -790,7 +783,8 @@ while (true) { // Outer loop: only follow-up re-enters here.
     pending = [];
 
     const response = await streamModel(context);
-    if (response.stopReason === "error" || response.stopReason === "aborted") return;
+    if (response.stopReason === "error" ||
+        response.stopReason === "aborted") return;
 
     const calls = response.toolCalls;
     const results = await validateGateAndExecute(calls);
@@ -799,7 +793,8 @@ while (true) { // Outer loop: only follow-up re-enters here.
     await prepareNextTurn();
     if (await shouldStopAfterTurn()) return;
 
-    automaticContinuation = calls.length > 0 && !results.every((result) => result.terminate);
+    automaticContinuation =
+      calls.length > 0 && !results.every((r) => r.terminate);
     pending = takeSteeringMessages();
   }
 
