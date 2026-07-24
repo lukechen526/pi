@@ -748,30 +748,12 @@ answers or requests tools. Tool results become part of the conversation for
 the next request. A run ends only when there are no tool calls that require a
 model follow-up and no queued user messages.
 
-```{mermaid}
-%%| label: fig-agent-loop-mental-model
-%%| fig-cap: "The model-facing loop. Tool schemas and tool guidance have different roles: schemas are sent in Context; guidance helps construct the system prompt."
-%%| fig-width: 5.8
-%%| fig-pos: "H"
-stateDiagram-v2
-  [*] --> Context
-  Context: Assemble Context
-  Context: system prompt, messages, active tools
-  Context --> Response
-  Response: Stream one assistant response
-  Response --> Tools: tool calls
-  Response --> QueueCheck: no tool calls
-  Tools: validate, gate, execute, append results
-  Tools --> QueueCheck: complete batch
-  QueueCheck: poll steering, then automatic continuation, then follow-up
-  QueueCheck --> Context: steering, continuation, or follow-up
-  QueueCheck --> [*]: no queued message
-```
-
 The actual implementation emits events, supports parallel tools, and refreshes
 next-turn state. It uses an inner loop for automatic tool continuation and
 steering, wrapped by an outer loop for follow-up. Its control flow can be read
 as this deliberately simplified version:
+
+\newpage
 
 ```ts
 let pending = takeSteeringMessages(); // Also catches input queued just before the run starts.
@@ -803,6 +785,26 @@ while (true) { // Outer loop: only follow-up re-enters here.
   pending = takeFollowUpMessages();
   if (pending.length === 0) break;
 }
+```
+
+```{mermaid}
+%%| label: fig-agent-loop-mental-model
+%%| fig-cap: "The model-facing loop. Tool schemas and tool guidance have different roles: schemas are sent in Context; guidance helps construct the system prompt."
+%%| fig-width: 5.8
+%%| fig-pos: "H"
+stateDiagram-v2
+  [*] --> Context
+  Context: Assemble Context
+  Context: system prompt, messages, active tools
+  Context --> Response
+  Response: Stream one assistant response
+  Response --> Tools: tool calls
+  Response --> QueueCheck: no tool calls
+  Tools: validate, gate, execute, append results
+  Tools --> QueueCheck: complete batch
+  QueueCheck: poll steering, then automatic continuation, then follow-up
+  QueueCheck --> Context: steering, continuation, or follow-up
+  QueueCheck --> [*]: no queued message
 ```
 
 This sketch preserves the rules that matter most: a failed tool becomes an
