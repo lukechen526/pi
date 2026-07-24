@@ -73,6 +73,8 @@ turns because the model calls `read`, then `bash`, then answers. The table
 below lists every event with its firing condition and what a handler can do,
 and @fig-extension-lifecycle-map gives the same lifecycle in one picture.
 
+
+
 Every extension event, grouped by the spine segment where it fires and listed
 in firing order. **Kind** uses the vocabulary from [How to read the
 map](#how-to-read-the-map): gates can cancel or block, transforms return or
@@ -114,6 +116,10 @@ and return shapes are in the [Extension event reference](#sec:events).
 | `model_select` / `thinking_level_select` | Model or thinking level changed | Notify | Update per-model UI/state |
 | `user_bash` | `!` / `!!` shell command | Gate | Supply a backend, wrap, or answer directly |
 
+```{=latex}
+\clearpage
+```
+
 ```{mermaid}
 %%| label: fig-extension-lifecycle-map
 %%| fig-cap: "The lifecycle in one picture: the nine stages of a prompt with the key extension events that fire in each. Blue handles input, amber is the model's working turn, gray keeps the record. The table above lists every event on each segment."
@@ -137,6 +143,10 @@ flowchart TD
   classDef input fill:#dbe7f5,stroke:#2f5b8f,color:#000000
   classDef turn fill:#fde2c4,stroke:#a05a00,color:#000000
   classDef settle fill:#e9e9e9,stroke:#666666,color:#000000
+```
+
+```{=latex}
+\clearpage
 ```
 
 Session replacement (`/new`, `/resume`, `/fork`, and also `/reload`) tears the

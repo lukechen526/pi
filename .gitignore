@@ -45,3 +45,6 @@ collect.sh
 
 /.quarto/
 **/*.quarto_ipynb
+
+# Generated book output
+developer-guide/_output/
