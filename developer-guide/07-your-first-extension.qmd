@@ -420,9 +420,9 @@ and deny paths.
 ## Try it
 
 1. Add argument completion to `/hello-pi` with `getArgumentCompletions`
-   (`packages/coding-agent/src/core/extensions/types.ts`), suggesting a few
-   names, and confirm the completions appear when you type `/hello-pi ` in the
-   editor.
+   (its type is in `core/extensions/types.ts` in the coding-agent package),
+   suggesting a few names, and confirm the completions appear when you type
+   `/hello-pi ` in the editor.
 2. Extend the counter to be per person (a map from name to count, persisted in
    one entry), then `/reload` and `pi --resume` and verify the per-person
    counts survive both.
