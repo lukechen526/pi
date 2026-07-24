@@ -144,18 +144,18 @@ because the model calls `read`, then `bash`, then answers.
 
 ```{mermaid}
 %%| label: fig-prompt-lifecycle-overview
-%%| fig-cap: "The complete prompt path. Startup precedes the loop; prompt and tool assembly precede the repeated provider/tool cycle; persistence is a side lane; settlement closes the run."
+%%| fig-cap: "The complete prompt path. Startup loads and trusts extensions; input and interception build the run; each model turn assembles context, calls the provider, and streams; tools are validated, gated, and executed; persistence records finalized work throughout; settlement closes the run."
 %%| fig-pos: "H"
 %%| fig-width: 6.3
-%%{init: {"flowchart": {"nodeSpacing": 18, "rankSpacing": 24}, "themeVariables": {"fontSize": "12px"}}}%%
+%%{init: {"flowchart": {"nodeSpacing": 18, "rankSpacing": 24}, "themeVariables": {"fontSize": "13px"}}}%%
 flowchart LR
-  S0["1. Startup,<br/>trust, resources"]:::input
-  S1["2-4. Input and<br/>run construction"]:::input
-  S5["5. Model turn:<br/>context, provider,<br/>stream"]:::turn
-  S6["6. Tools:<br/>validate, gate,<br/>execute"]:::turn
-  S7{"7. Continue<br/>this run?"}
-  S8["8. Persistence<br/>(side lane)"]:::settle
-  S9["9. Recovery<br/>and settlement"]:::settle
+  S0["1. Startup"]:::input
+  S1["2-4. Input"]:::input
+  S5["5. Model turn"]:::turn
+  S6["6. Tools"]:::turn
+  S7{"7. Continue?"}
+  S8["8. Persistence"]:::settle
+  S9["9. Settlement"]:::settle
   S0 --> S1 --> S5 --> S6 --> S7
   S7 -->|"yes"| S5
   S7 -->|"no"| S9
@@ -168,10 +168,12 @@ flowchart LR
 
 ## Stage 1: Startup, trust, and resource discovery
 
-**In plain terms:** before any prompt exists, Pi loads your extension's
-factory, decides whether the current project is trusted, starts a session, and
-asks extensions whether they have extra skills, prompts, or themes to
-contribute.
+**In plain terms:** Pi wakes up. Before any prompt exists, it loads every
+extension's registration code, decides whether the current folder is allowed
+to contribute its own code and settings, opens a session — the notebook the
+conversation will live in — and asks extensions whether they have extra
+skills, prompts, or themes to add. Only then is Pi ready to listen. The
+mechanics, in order:
 
 At startup the resource loader loads each extension's factory function. An
 async factory is awaited before startup continues, so its registrations are
@@ -218,9 +220,12 @@ exposes its skills and prompts without settings changes.
 
 ## Stage 2: Terminal input enters the TUI
 
-**In plain terms:** pressing Enter hands your text to the session; pressing it
-while the model is still working queues the text for a later turn instead of
-interrupting.
+**In plain terms:** you type something and press Enter, and your keystrokes
+become a submission to the session. If Pi is idle, the submission is picked up
+immediately. If Pi is still working, the submission does not interrupt — it
+waits in a queue for the right moment to be heard. Pressing Esc is the
+opposite: it stops the current work instead of queueing. How the editor
+decides which of those happens:
 
 `InteractiveMode` owns the coding-agent's interactive screen. Its editor
 submission handler recognizes built-in slash commands and `!`/`!!` user-shell
@@ -258,8 +263,12 @@ modes you select with `sendUserMessage(text, { deliverAs: "steer" | "followUp" }
 
 ## Stage 3: Commands and input interception
 
-**In plain terms:** before your text becomes a prompt, Pi gives two command
-systems and every extension a chance to claim or rewrite it.
+**In plain terms:** not everything you submit is meant for the model. Before
+your text becomes a prompt, Pi sorts it: is it a built-in command like
+`/model`? A command some extension registered? An instruction for the shell?
+Only what no one claims continues on as ordinary text — and even that gets one
+last chance to be rewritten by an extension before it counts as a prompt. The
+sorting order:
 
 There are two distinct command systems:
 
@@ -330,9 +339,12 @@ transforming or handling ordinary text.
 
 ## Stage 4: Run construction and delivery modes
 
-**In plain terms:** the session validates that a run can start, gathers your
-message plus any buffered extension messages, notifies extensions that a run is
-beginning, and hands everything to the generic agent loop.
+**In plain terms:** once your text is accepted as a prompt, Pi packs the
+request. It checks that a model and credentials are ready, creates your
+message, folds in anything extensions asked to attach to this prompt, gives
+extensions one last chance to adjust the instructions the model will run
+under, and then starts the engine that will actually talk to the model. What
+gets packed, and in what order:
 
 `AgentMessage` is the type the session passes around: it is either a
 provider-ready LLM `Message` or a coding-agent-specific custom message type.
@@ -390,10 +402,12 @@ add messages or override the system prompt before the loop takes over;
 
 ## Stage 5: One model turn
 
-**In plain terms:** each turn, Pi lets extensions adjust the message list,
-converts the result into the provider's wire format, streams the response
-chunk by chunk, and republishes the chunks as Pi's own events. The transcript
-you see typing out is those events being rendered.
+**In plain terms:** this is the moment Pi actually talks to the model. It
+translates the conversation so far into the exact format the provider's API
+expects, sends the request, and then listens as the answer arrives chunk by
+chunk — a few tokens at a time. Each chunk is republished as a Pi event, which
+is why you see the transcript typing out live. The three translations, and the
+stream that follows:
 
 Immediately before *each* model request, `streamAssistantResponse()` in
 `agent-loop.ts` crosses three construction boundaries in sequence:
@@ -469,10 +483,13 @@ output live, for example to stream progress into custom UI.
 
 ## Stage 6: Tool calls are validated, gated, and executed
 
-**In plain terms:** when the model asks to run tools, Pi checks each request
-against the tool's schema, lets extensions veto or modify it, executes it, and
-appends the result where the model can see it. In the running example, this is
-where the model's `read` call on the config file is checked and executed.
+**In plain terms:** the model often answers with a request to *do*
+something — read this file, run this command. Pi does not obey blindly. It
+checks each request against the tool's declared input shape, gives extensions
+a chance to veto or adjust it, runs it, and files the result where the model
+will see it on the next turn. In the running example, this is where the
+model's `read` call on the config file is checked and executed. The pipeline
+every tool call passes through:
 
 After a final assistant message, `agent-loop.ts` filters content blocks whose
 `type` is `"toolCall"`. A `"length"` stop means the token limit cut off the
@@ -530,11 +547,14 @@ what the model sees afterwards.
 
 ## Stage 7: Results create the next agent action
 
-**In plain terms:** tool results go back to the model; final text ends the turn
-unless someone — you, via steering or follow-up — has queued more to say. In
-the running example, the `read` result returns here and starts the turn where
-the model calls `bash` to run the test; when the model finally answers with
-plain text, this is where the run decides to stop.
+**In plain terms:** after a turn finishes, Pi looks at what it has and
+decides what happens next. Tool results go back to the model so it can
+continue working. If you queued an instruction mid-run, it is heard now. Only
+when the model has nothing more to do and no one has anything more to say does
+the run wind down. In the running example, the `read` result returns here and
+starts the turn where the model calls `bash` to run the test; when the model
+finally answers with plain text, this is where the run decides to stop. The
+decision order:
 
 Each final tool result is appended to the in-memory agent context and becomes
 the model-facing material for the next turn. This includes schema failures,
@@ -572,9 +592,11 @@ that flag. A tool signals failure by throwing; merely returning a field named
 
 ## Stage 8: Persistence is a side lane, not a stage
 
-**In plain terms:** while the turn runs, finalized messages are appended to the
-durable session file and, in parallel, to the on-screen transcript. Custom UI
-renderers only change the screen, never the model loop.
+**In plain terms:** while all of this runs, a quiet side lane keeps the
+record. Every message that finalizes — yours, the model's, each tool result —
+is appended to the session file on disk, and in parallel to the transcript on
+screen. Nothing waits for the run to finish, and nothing about how things look
+changes what the model sees. What exactly gets recorded, and what does not:
 
 Persistence does not wait for the run to finish. As each message finalizes —
 the user message, each assistant message, each toolResult — `AgentSession`
@@ -607,10 +629,12 @@ messages and entries look on screen.
 
 ## Stage 9: Errors, retries, and true settlement
 
-**In plain terms:** a run can fail, be cancelled, retry, compact, and finally
-settle. `agent_end` fires when *each* low-level loop stops — including failed,
-compacted, and aborted runs — while `agent_settled` fires once, when nothing
-automatic is left to do.
+**In plain terms:** things go wrong, and Pi is built to absorb that. A
+provider error can be retried. A conversation that grew too large can be
+summarized and continued. You can cancel at any time. Each of these paths ends
+the current attempt, but the *run* is only truly over when there is nothing
+automatic left to do — no pending retry, no queued message. How the pieces
+fit:
 
 ```{mermaid}
 %%| label: fig-run-lifecycle
@@ -752,6 +776,7 @@ model follow-up and no queued user messages.
 %%| label: fig-agent-loop-mental-model
 %%| fig-cap: "The model-facing loop. Tool schemas and tool guidance have different roles: schemas are sent in Context; guidance helps construct the system prompt."
 %%| fig-width: 5.8
+%%| fig-pos: "H"
 stateDiagram-v2
   [*] --> Context
   Context: Assemble Context
