@@ -38,19 +38,7 @@ usually creates one turn, while `"Read the config and fix the failing test"`
 can create several turns because the model may call `read`, then `bash`, then
 answer. The path below explains what stays the same in both examples.
 
-## How to read the map
-
-Every hook is one of three kinds. **Notification** hooks observe; their
-return values are ignored. **Transform** hooks return or mutate a value Pi
-then uses. **Gate** hooks can cancel, block, or take over the operation
-entirely. Handlers for the same event run in extension load order, and where
-a value chains — the system prompt, input transforms, `tool_call` input
-mutations, `tool_result` patches — each handler sees the previous handler's
-output. The exact payload and return contract of every
-event is in the [Extension event reference](#sec:events) and the official
-[Extensions documentation](https://pi.dev/docs/latest/extensions#events).
-
-Two distinctions to carry through the whole chapter:
+## Two distinctions to carry through the chapter
 
 - **`agent_end` is not the end.** Retry, compaction-and-retry, or a queued
   follow-up can start another low-level run. `agent_settled` is the true-idle
@@ -65,56 +53,53 @@ Two distinctions to carry through the whole chapter:
 You are looking at the complete life of a prompt, from Pi waking up to the
 run going idle. Each box is a stage; the rest of this chapter walks through
 the stages one by one. Inside each box are the extension **events** that fire
-there — the points where your code can run, colored by the vocabulary above.
+there — the points where extension code can run (the next chapter,
+[Your first extension](#sec:extensions), shows how handlers hook into them).
 The blue stages handle your input, the amber stages are the model's working
 turns, and the gray stages keep the record. As a running example, picture the
 prompt `"Read the config and fix the failing test"`: it produces several
 turns because the model calls `read`, then `bash`, then answers. The table
-below lists every event with its firing condition and what a handler can do,
-and @fig-extension-lifecycle-map gives the same lifecycle in one picture.
+below lists every event with its firing condition and meaning, and
+@fig-extension-lifecycle-map gives the same lifecycle in one picture.
 
+Every extension event, grouped by the segment where it fires, in firing
+order and in plain language. How a handler hooks into each event is covered
+in [Your first extension](#sec:extensions); exact payloads and return shapes
+are in the [Extension event reference](#sec:events).
 
-
-Every extension event, grouped by the spine segment where it fires and listed
-in firing order. **Kind** uses the vocabulary from [How to read the
-map](#how-to-read-the-map): gates can cancel or block, transforms return or
-mutate a value Pi then uses, notifications are observe-only; **Both** means
-the row mixes notification and transform behavior. Exact payloads
-and return shapes are in the [Extension event reference](#sec:events).
-
-| Event | When it fires | Kind | What a handler can do |
-|------------------------|------------------|-----------|--------------------------|
-| **Startup** | | | |
-| `project_trust` | Before project resources load | Gate | Return `yes`/`no`/`undecided`; first yes/no wins |
-| `session_start` | Session opened, reloaded, or replaced | Notify | Initialize resources; rebuild state |
-| `resources_discover` | After `session_start` | Transform | Return skill/prompt/theme paths |
-| **Prompt preparation** | | | |
-| `input` | Raw text, before skill/template expansion | Gate | `continue`, `transform`, or `handled` |
-| `before_agent_start` | After input, before the loop | Transform | Inject a message; chain the system prompt |
-| `agent_start` | Low-level run begins | Notify | |
-| **Each turn** | | | |
-| `turn_start` / `turn_end` | Bracket one model request + tool batch | Notify | Measure turns; `turn_end` carries `toolResults` |
-| `message_start`/`message_end` | User message submitted | Notify | |
-| `context` | Before every provider request | Transform | Return a replacement message list |
-| `before_provider_headers` | Headers assembled; once per request | Transform | Mutate headers in place (`null` deletes) |
-| `before_provider_request` | Payload serialized, before send | Transform | Return a replacement payload |
-| `after_provider_response` | Response received, before stream consumed | Notify | Observe status and headers |
-| `message_start`/`update`/`end` | Assistant streaming output | Both | Observe deltas; `message_end` may replace the message |
-| `tool_execution_start` | Tool call validated | Notify | |
-| `tool_call` | Before execution | Gate | `{ block: true, reason }`; mutate `event.input` |
-| `tool_execution_update` | Tool progress | Notify | Render progress |
-| `tool_result` | After execution, before append | Transform | Return partial patches (chained) |
-| `tool_execution_end` | Tool finalized (completion order) | Notify | |
-| **Run end** | | | |
-| `agent_end` | Low-level loop stopped | Notify | `event.messages` from this run |
-| `agent_settled` | No retry, compaction, or queued work left | Notify | True-idle signal |
-| **Other paths** | | | |
-| `session_before_switch` / `_fork` / `_compact` / `_tree` | Before the named session operation | Gate | `{ cancel: true }`; compact/tree accept custom summaries |
-| `session_shutdown` | Before teardown (exit, reload, replace) | Notify | Clean up session-bound resources |
-| `session_compact` / `session_tree` | Compaction or navigation completed | Notify | Rebuild branch-dependent state |
-| `session_info_changed` | `/name` or `setSessionName()` | Notify | Update UI |
-| `model_select` / `thinking_level_select` | Model or thinking level changed | Notify | Update per-model UI/state |
-| `user_bash` | `!` / `!!` shell command | Gate | Supply a backend, wrap, or answer directly |
+| Event | When it fires | What it is |
+|------------------------|------------------|------------------------------------|
+| **Startup** | | |
+| `project_trust` | Before project resources load | Pi asking whether this folder's own code and settings may load |
+| `session_start` | Session opened, reloaded, or replaced | A session is open and ready; the extension instance is fresh |
+| `resources_discover` | After `session_start` | Pi collecting extra skill, prompt, and theme paths |
+| **Prompt preparation** | | |
+| `input` | Before skill/template expansion | Your submitted text, not yet a prompt |
+| `before_agent_start` | After input, before the loop | The accepted prompt, moments before the run starts |
+| `agent_start` | Low-level run begins | The engine that talks to the model has started |
+| **Each turn** | | |
+| `turn_start` / `turn_end` | Bracket one model request + tool batch | One model request and the tool work it triggers |
+| `message_start`/`message_end` | User message submitted | Your message entering the conversation record |
+| `context` | Before every provider request | The message list the model is about to see |
+| `before_provider_headers` | Headers assembled; once per request | The outgoing HTTP headers, fully assembled |
+| `before_provider_request` | Payload serialized, before send | The provider-specific request payload, not yet on the wire |
+| `after_provider_response` | Response received, before stream consumed | The HTTP response's status and headers |
+| `message_start`/`update`/`end` | Assistant streaming output | The model's answer arriving, chunk by chunk |
+| `tool_execution_start` | Tool call validated | A tool request that passed schema validation |
+| `tool_call` | Before execution | A validated request from the model to act, not yet executed |
+| `tool_execution_update` | Tool progress | Intermediate output from a running tool |
+| `tool_result` | After execution, before append | The tool's output, before it joins the conversation |
+| `tool_execution_end` | Tool finalized (completion order) | A finished tool and its final result |
+| **Run end** | | |
+| `agent_end` | Low-level loop stopped | One attempt over; retry or queued work may still follow |
+| `agent_settled` | No retry, compaction, or queued work left | True idle; nothing automatic remains |
+| **Other paths** | | |
+| `session_before_switch` / `_fork` / `_compact` / `_tree` | Before the named session operation | Pi about to switch, fork, compact, or navigate the session |
+| `session_shutdown` | Before teardown (exit, reload, replace) | The session runtime about to be torn down |
+| `session_compact` / `session_tree` | Compaction or navigation completed | The session's history has been summarized or re-pointed |
+| `session_info_changed` | `/name` or `setSessionName()` | The session's display name changed |
+| `model_select` / `thinking_level_select` | Model or thinking level changed | The active model or its reasoning effort changed |
+| `user_bash` | `!` / `!!` shell command | A shell command you typed directly, before it runs |
 
 ```{=latex}
 \clearpage
