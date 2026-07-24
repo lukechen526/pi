@@ -2,8 +2,9 @@
 
 The lifecycle is the map of extension hook points. This chapter answers one
 question — **when Pi runs your code, and what that code can influence** — in
-two passes: a complete event map first, then a stage-by-stage trace of one
-prompt from startup to settlement. Chapters 7-8 assume you can read these maps.
+two passes: the whole lifecycle in one picture first, then a stage-by-stage
+trace of one prompt from startup to settlement. Chapters 7-8 assume you can
+read this map.
 
 Before reading on, finish [TypeScript used by Pi](#sec:typescript) and
 [Architecture](#sec:architecture). The chapter stays at the extension-facing
@@ -37,30 +38,40 @@ usually creates one turn, while `"Read the config and fix the failing test"`
 can create several turns because the model may call `read`, then `bash`, then
 answer. The path below explains what stays the same in both examples.
 
-## Map 1: The extension event lifecycle
+## How to read the map
 
-This is every extension event, in the order Pi emits it, grouped by phase.
-The prompt loop in the middle repeats for every prompt; the session-operation
-paths at the bottom branch off between prompt loops. Events marked **[gate]**
-can cancel, block, or take over; events marked **[transform]** return or
-mutate a value Pi then uses; unmarked events are notification-only.
+Every hook is one of three kinds. **Notification** hooks observe; their
+return values are ignored. **Transform** hooks return or mutate a value Pi
+then uses. **Gate** hooks can cancel, block, or take over the operation
+entirely. Handlers for the same event run in extension load order, and where
+a value chains — the system prompt, input transforms, `tool_call` input
+mutations, `tool_result` patches — each handler sees the previous handler's
+output. The exact payload and return contract of every
+event is in the [Extension event reference](#sec:events) and the official
+[Extensions documentation](https://pi.dev/docs/latest/extensions#events).
 
-```{mermaid}
-%%| label: fig-extension-lifecycle-map
-%%| fig-cap: "Map 1: the extension event lifecycle spine. The table below lists every event on each segment."
-%%| fig-width: 4.6
-%%| fig-pos: "H"
-%%{init: {"flowchart": {"nodeSpacing": 16, "rankSpacing": 22}, "themeVariables": {"fontSize": "12px"}}}%%
-flowchart TD
-  S["<b>1 · Startup</b><br/>load, trust, session_start"]:::phase
-  P["<b>2 · Prompt preparation</b><br/>input → agent_start"]:::phase
-  T["<b>3 · Turn loop</b><br/>repeats while tools are called"]:::phase
-  E["<b>4 · Run end</b><br/>agent_end → agent_settled"]:::phase
-  O["<b>Other paths</b><br/>session ops, model, user_bash, exit"]:::phase
-  S --> P --> T --> E
-  E -.-> O
-  classDef phase fill:#eef3f9,stroke:#2f5b8f,color:#000000
-```
+Two distinctions to carry through the whole chapter:
+
+- **`agent_end` is not the end.** Retry, compaction-and-retry, or a queued
+  follow-up can start another low-level run. `agent_settled` is the true-idle
+  signal; Stage 9 makes this concrete.
+- **Message events have three lanes.** User, assistant, and finalized
+  toolResult messages each get their own `message_start`/`message_end` pair at
+  different points in a turn; only assistant messages get `message_update`
+  streaming deltas.
+
+## The lifecycle in one picture
+
+You are looking at the complete life of a prompt, from Pi waking up to the
+run going idle. Each box is a stage; the rest of this chapter walks through
+the stages one by one. Inside each box are the extension **events** that fire
+there — the points where your code can run, colored by the vocabulary above.
+The blue stages handle your input, the amber stages are the model's working
+turns, and the gray stages keep the record. As a running example, picture the
+prompt `"Read the config and fix the failing test"`: it produces several
+turns because the model calls `read`, then `bash`, then answers. The table
+below lists every event with its firing condition and what a handler can do,
+and @fig-extension-lifecycle-map gives the same lifecycle in one picture.
 
 Every extension event, grouped by the spine segment where it fires and listed
 in firing order. **Kind** uses the vocabulary from [How to read the
@@ -103,6 +114,31 @@ and return shapes are in the [Extension event reference](#sec:events).
 | `model_select` / `thinking_level_select` | Model or thinking level changed | Notify | Update per-model UI/state |
 | `user_bash` | `!` / `!!` shell command | Gate | Supply a backend, wrap, or answer directly |
 
+```{mermaid}
+%%| label: fig-extension-lifecycle-map
+%%| fig-cap: "The lifecycle in one picture: the nine stages of a prompt with the key extension events that fire in each. Blue handles input, amber is the model's working turn, gray keeps the record. The table above lists every event on each segment."
+%%| fig-width: 4.6
+%%{init: {"flowchart": {"nodeSpacing": 14, "rankSpacing": 20}, "themeVariables": {"fontSize": "12px"}}}%%
+flowchart TD
+  S0["<b>1 · Startup</b><br/>project_trust · session_start<br/>resources_discover"]:::input
+  S1["<b>2-4 · Input and run setup</b><br/>input · before_agent_start<br/>agent_start"]:::input
+  S5["<b>5 · Model turn</b><br/>turn_start · context<br/>provider hooks · message events<br/>turn_end"]:::turn
+  S6["<b>6 · Tools</b><br/>tool_execution_start · tool_call<br/>tool_result · tool_execution_end"]:::turn
+  S7{"<b>7</b><br/>Continue?"}
+  S8["<b>8 · Persistence</b><br/>appendEntry · renderers"]:::settle
+  S9["<b>9 · Settlement</b><br/>agent_end → agent_settled"]:::settle
+  O["<b>Other paths</b><br/>session_before_* · model_select<br/>user_bash · session_shutdown"]:::settle
+  S0 --> S1 --> S5 --> S6 --> S7
+  S7 -->|"yes"| S5
+  S7 -->|"no"| S9
+  S5 -.-> S8
+  S6 -.-> S8
+  S9 -.-> O
+  classDef input fill:#dbe7f5,stroke:#2f5b8f,color:#000000
+  classDef turn fill:#fde2c4,stroke:#a05a00,color:#000000
+  classDef settle fill:#e9e9e9,stroke:#666666,color:#000000
+```
+
 Session replacement (`/new`, `/resume`, `/fork`, and also `/reload`) tears the
 old extension instance down completely: `session_shutdown` fires, extensions
 are reloaded and rebound, and the *new* instance receives `session_start`.
@@ -110,61 +146,6 @@ That is why durable-state patterns always pair cleanup in `session_shutdown`
 with reconstruction in `session_start`. Session replacement can also re-enter
 `project_trust` when it lands in a directory whose trust has not been resolved
 in the current process.
-
-## How to read the map
-
-Every hook is one of three kinds. **Notification** hooks observe; their
-return values are ignored. **Transform** hooks return or mutate a value Pi
-then uses. **Gate** hooks can cancel, block, or take over the operation
-entirely. Handlers for the same event run in extension load order, and where
-a value chains — the system prompt, input transforms, `tool_call` input
-mutations, `tool_result` patches — each handler sees the previous handler's
-output. The exact payload and return contract of every
-event is in the [Extension event reference](#sec:events) and the official
-[Extensions documentation](https://pi.dev/docs/latest/extensions#events).
-
-Two distinctions to carry through the whole chapter:
-
-- **`agent_end` is not the end.** Retry, compaction-and-retry, or a queued
-  follow-up can start another low-level run. `agent_settled` is the true-idle
-  signal; Stage 9 makes this concrete.
-- **Message events have three lanes.** User, assistant, and finalized
-  toolResult messages each get their own `message_start`/`message_end` pair at
-  different points in a turn; only assistant messages get `message_update`
-  streaming deltas.
-
-## Map 2: One prompt at a glance
-
-**In plain terms:** your text travels from the editor, through interception and
-context construction, to the provider, and back through streaming events, tool
-execution, and persistence. The map below is the rest of the chapter in one
-picture; each stage section then zooms in. As a running example, picture the
-prompt `"Read the config and fix the failing test"`: it produces several turns
-because the model calls `read`, then `bash`, then answers.
-
-```{mermaid}
-%%| label: fig-prompt-lifecycle-overview
-%%| fig-cap: "The complete prompt path. Startup loads and trusts extensions; input and interception build the run; each model turn assembles context, calls the provider, and streams; tools are validated, gated, and executed; persistence records finalized work throughout; settlement closes the run."
-%%| fig-pos: "H"
-%%| fig-width: 6.3
-%%{init: {"flowchart": {"nodeSpacing": 18, "rankSpacing": 24}, "themeVariables": {"fontSize": "13px"}}}%%
-flowchart LR
-  S0["1. Startup"]:::input
-  S1["2-4. Input"]:::input
-  S5["5. Model turn"]:::turn
-  S6["6. Tools"]:::turn
-  S7{"7. Continue?"}
-  S8["8. Persistence"]:::settle
-  S9["9. Settlement"]:::settle
-  S0 --> S1 --> S5 --> S6 --> S7
-  S7 -->|"yes"| S5
-  S7 -->|"no"| S9
-  S5 -.-> S8
-  S6 -.-> S8
-  classDef input fill:#dbe7f5,stroke:#2f5b8f,color:#000000
-  classDef turn fill:#fde2c4,stroke:#a05a00,color:#000000
-  classDef settle fill:#e9e9e9,stroke:#666666,color:#000000
-```
 
 ## Stage 1: Startup, trust, and resource discovery
 
@@ -891,7 +872,7 @@ can rely on; the source symbols above show which layer makes each guarantee.
 - [Extension patterns](#sec:customization) — production recipes for the gates
   and state patterns named here.
 - [Extension event reference](#sec:events) — exact payloads, return values,
-  and middleware ordering for every event on Map 1.
+  and middleware ordering for every event on the lifecycle map.
 - [Agent core](#sec:agent-core) and [Models, providers, and
   authentication](#sec:models) — the internals summarized in [Under the
   hood](#under-the-hood).
@@ -902,7 +883,8 @@ can rely on; the source symbols above show which layer makes each guarantee.
    `pi.on("tool_call", async (event, ctx) => ctx.ui.notify(event.toolName, "info"))`.
    Load it with `pi -e ./log-tools.ts`, ask Pi to read a file, and answer:
    which stage does `tool_call` fire in, and which events fire immediately
-   before and after it? (Check your answer against Map 1 and the timeline in
+   before and after it? (Check your answer against the lifecycle map and the
+   timeline in
    `packages/coding-agent/docs/extensions.md`.) Avoid `console.log` here —
    in print, JSON, and RPC modes, stdout carries machine-readable output.
 2. Using the delivery-mode table in Stage 4, predict what happens when you
