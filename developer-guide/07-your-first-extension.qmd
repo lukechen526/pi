@@ -31,12 +31,12 @@ Under the hood, Pi loads an extension with `jiti`, a runtime TypeScript
 loader. Jiti transpiles TypeScript syntax on demand, so an extension needs no
 build step; it does not type-check the code. The module's default export is a
 [**factory**](#sec:glossary): a function that receives `ExtensionAPI` and
-registers the extension's behavior — [hooks](#sec:glossary), tools, commands,
+registers the extension's behavior — [event handlers](#sec:glossary), tools, commands,
 shortcuts, flags, renderers, and providers.
 
-A **hook** is a handler subscribed to a named lifecycle **event** — an
-occurrence such as "the session started" or "a tool is about to run" — where
-your code can observe or change what Pi does next. The full event map is
+An **event handler** (often called a **hook**) is subscribed to a named lifecycle
+**event** — an occurrence such as "the session started" or "a tool is about to
+run" — where your code can observe or change what Pi does next. The full event map is
 [The prompt lifecycle](#sec:prompt-lifecycle); this chapter uses only four
 events and introduces each when the tutorial needs it.
 
@@ -47,14 +47,14 @@ the first design decision:
 |---|---|---|
 | Command (`pi.registerCommand`) | An action the user triggers explicitly, such as `/hello-pi` | The user typing `/name` |
 | Tool (`pi.registerTool`) | A capability the AI model can call during a turn, with validated arguments | The model, via a tool call |
-| Hook (`pi.on`) | To observe or gate something Pi already does: react at startup, block a tool call, persist state at shutdown | Pi, at the matching lifecycle event |
+| Event handler (`pi.on`) | To observe or gate something Pi already does: react at startup, block a tool call, persist state at shutdown | Pi, at the matching lifecycle event |
 
 Each registration surface receives a different object. Keep this table beside
 you while reading the stages:
 
 | Surface | Receives | Purpose |
 |---|---|---|
-| Factory | `pi: ExtensionAPI` | Register tools, commands, hooks, and more |
+| Factory | `pi: ExtensionAPI` | Register tools, commands, event handlers, and more |
 | Event handler | `event` + `ctx: ExtensionContext` | Observe or affect the current runtime |
 | Command handler | `args` + `ctx: ExtensionCommandContext` | Same as above, plus session-changing methods (`newSession`, `reload`, `waitForIdle`, ...) |
 | Tool `execute` | validated `params`, `signal`, `onUpdate`, `ctx` | Perform the work the model requested |
@@ -337,18 +337,18 @@ end.
 **Cleanup when you are done:** remove `~/.pi/agent/extensions/hello-pi.ts`,
 then `/reload`.
 
-## Every event an extension can hook
+## Every event an extension can handle
 
 [The prompt lifecycle](#sec:prompt-lifecycle) showed *when* each event fires.
 This section is the other half: **what your handler can do at each point.**
 It is the reference version of the mental model from earlier — come back to it
-whenever you need to pick a hook.
+whenever you need to pick an event handler.
 
-### Three kinds of hooks
+### Three kinds of event handlers
 
-Every hook is one of three kinds. **Notification** hooks observe; their
-return values are ignored. **Transform** hooks return or mutate a value Pi
-then uses. **Gate** hooks can cancel, block, or take over the operation
+Every event handler is one of three kinds. **Notification** handlers observe;
+their return values are ignored. **Transform** handlers return or mutate a value
+Pi then uses. **Gate** handlers can cancel, block, or take over the operation
 entirely. Handlers for the same event run in extension load order, and where
 a value chains — the system prompt, input transforms, `tool_call` input
 mutations, `tool_result` patches — each handler sees the previous handler's
@@ -397,7 +397,7 @@ fires in the lifecycle and listed in firing order:
 payloads and return shapes for every event are in the [Extension event
 reference](#sec:events) and the official [Extensions
 documentation](https://pi.dev/docs/latest/extensions#events); runnable
-recipes that put these hooks to work are in [Extension
+recipes that put these event handlers to work are in [Extension
 patterns](#sec:customization).
 
 ## Host safety: UI calls outside the terminal
@@ -444,7 +444,7 @@ Work from loading toward the failing behavior:
    gives real type-checking. For the one-file tutorial, treat `pi -e` load
    success plus editor diagnostics as the check.
 3. **Isolate one boundary.** Exercise one command or one simple tool call. Add
-   temporary notifications to the relevant hooks in TUI mode, or concise
+   temporary notifications to the relevant event handlers in TUI mode, or concise
    logging when testing print mode. Check command names, tool names, schemas,
    and descriptions before debugging a multi-turn interaction.
 4. **Inspect model-facing state.** To see what the model can call, use
@@ -473,11 +473,11 @@ Work from loading toward the failing behavior:
 | Dialog silently denies in print/JSON mode | `ctx.hasUI` was not checked | Define a noninteractive policy before calling the dialog |
 | Extension works once but misbehaves after reload | Stale references or leaked resources | Clean up in `session_shutdown`; `return` right after `ctx.reload()` |
 
-Pi logs ordinary handler errors and keeps running, so a throwing hook usually
+Pi logs ordinary handler errors and keeps running, so a throwing event handler usually
 degrades behavior instead of crashing Pi. One boundary is deliberately
 fail-safe: if a `tool_call` handler throws, that tool call is blocked and the
 error reaches the model as an error tool result. The exact sequencing is in
-the [Extension event reference](#sec:events); test policy hooks on both allow
+the [Extension event reference](#sec:events); test policy handlers on both allow
 and deny paths.
 
 ## Try it
