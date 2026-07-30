@@ -100,7 +100,7 @@ separate from Pi's own instructions), skills, and a final cwd line;
 replacement swaps the base out entirely while keeping the appended parts.
 For the complete model-facing assembly—why tool schemas, tool guidance, and tool
 results are separate—and the rule that continues or ends a run, read
-[The agent loop in one picture](06-lifecycle-and-hooks.qmd#the-agent-loop-in-one-picture).
+[The agent loop in one picture](07-lifecycle-and-hooks.qmd#the-agent-loop-in-one-picture).
 
 **What Pi deliberately does not build in** (see the philosophy section of
 `packages/coding-agent/README.md`):
@@ -367,7 +367,7 @@ flowchart TD
 ```
 
 For the corresponding coding-agent assembly path and the distinction between a
-low-level run ending and a session settling, see [The agent loop in one picture](06-lifecycle-and-hooks.qmd#the-agent-loop-in-one-picture).
+low-level run ending and a session settling, see [The agent loop in one picture](07-lifecycle-and-hooks.qmd#the-agent-loop-in-one-picture).
 
 The generic loop deliberately receives callbacks such as `convertToLlm`,
 `transformContext`, `beforeToolCall`, and `afterToolCall` instead of
@@ -376,9 +376,10 @@ because every Pi-specific decision arrives as a callback, the same loop runs
 under unit tests, the SDK, and other harnesses without importing a single
 coding-agent file. For example, coding-agent passes a `convertToLlm` that
 translates session message types into LLM messages, dropping durable-only
-entry data the provider should never see — the persistence half of that split
-is covered in [Persistence and context are different
-things](#sec:persistence-vs-context) below.
+entry data the provider should never see. For the complete representation path,
+see [From session history to provider requests](06-from-session-history-to-provider-requests.qmd#sec:message-formats).
+The persistence half of that split is covered in [Persistence and context are
+different things](#sec:persistence-vs-context) below.
 
 ### `packages/coding-agent`: the Pi application
 

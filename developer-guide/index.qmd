@@ -27,7 +27,7 @@ complete beginner route that returns to the shorter Pi chapter after the
 foundations.
 
 ::: {.callout-tip title="First success in 10–15 minutes"}
-Use the staged [first extension](07-your-first-extension.qmd#a-complete-first-extension)
+Use the staged [first extension](08-your-first-extension.qmd#a-complete-first-extension)
 rather than copying a second example into this index.
 
 1. Create the discovered location and save the stage-1 `hello-pi.ts` listing:
@@ -192,33 +192,36 @@ the rendered order recorded in `developer-guide/_quarto.yml` and in
 
 5. [Architecture: packages, ownership, and entry points](#sec:architecture)
    gives each package one clear job.
-6. [Prompt lifecycle](#sec:prompt-lifecycle) starts with a unified agent-loop,
+6. [From session history to provider requests](06-from-session-history-to-provider-requests.qmd#sec:message-formats)
+   explains the transformations between session entries, canonical messages,
+   and provider-specific payloads.
+7. [Prompt lifecycle](#sec:prompt-lifecycle) starts with a unified agent-loop,
    tool, and system-prompt assembly model, then traces Enter to settlement and
    maps every extension hook point.
 
 ### Building extensions
 
-7. [Your first extension](#sec:extensions) is the canonical runnable example.
-8. [Extension patterns](#sec:customization) turns that demo into a production
+8. [Your first extension](#sec:extensions) is the canonical runnable example.
+9. [Extension patterns](#sec:customization) turns that demo into a production
    extension.
-9. [Packaging and distribution](#sec:packages) ships it as a Pi package.
+10. [Packaging and distribution](#sec:packages) ships it as a Pi package.
 
 ### Subsystem deep dives
 
-10. [Built-in tools](#sec:tools): the seven tools and their contracts.
-11. [Models, providers, and authentication](#sec:models).
-12. [Agent core](#sec:agent-core): implementation-level loop, events, queues,
+11. [Built-in tools](#sec:tools): the seven tools and their contracts.
+12. [Models, providers, and authentication](#sec:models).
+13. [Agent core](#sec:agent-core): implementation-level loop, events, queues,
     and tool scheduling detail.
-13. [The terminal UI](#sec:tui).
-14. [Run modes and SDK embedding](#sec:modes).
+14. [The terminal UI](#sec:tui).
+15. [Run modes and SDK embedding](#sec:modes).
 
 ### Practice and reference
 
-15. [Testing, debugging, and contribution](#sec:testing).
-16. [Guided source tours](#sec:tours).
-17. [Extension event and API reference](#sec:events).
-18. [Failure and recovery](#sec:failure).
-19. [Glossary](#sec:glossary).
+16. [Testing, debugging, and contribution](#sec:testing).
+17. [Guided source tours](#sec:tours).
+18. [Extension event and API reference](#sec:events).
+19. [Failure and recovery](#sec:failure).
+20. [Glossary](#sec:glossary).
 
 ## Source map used for this guide
 

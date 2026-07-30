@@ -116,7 +116,8 @@ return/branch in order:
 8. `_runAgentPrompt`.
 
 Then read the `Agent` call path and `streamAssistantResponse` to see the later
-context transform plus `convertToLlm` boundary.
+context transform plus `convertToLlm` boundary. For the complete representation
+trace, see [From session history to provider requests](06-from-session-history-to-provider-requests.qmd#sec:message-formats).
 
 **Outcome:** You can identify where `input`, `before_agent_start`, `context`,
 and `before_provider_request` run, then narrow your investigation to the hook
@@ -223,7 +224,9 @@ composed provider and an adapter such as
 `packages/ai/src/api/openai-completions.ts` or
 `packages/ai/src/api/anthropic-messages.ts`; identify its serialization and
 event-stream parser entry points. `packages/ai/src/compat.ts` is a
-compatibility/default fallback, not the primary coding-agent route.
+compatibility/default fallback, not the primary coding-agent route. For the
+message and payload boundaries around this dispatch, see [From session history
+to provider requests](06-from-session-history-to-provider-requests.qmd#sec:message-formats).
 
 **Outcome:** You can distinguish configuration bugs (registry), protocol bugs
 (adapter), and runtime-loop bugs (agent) without a speculative rewrite.
@@ -252,7 +255,9 @@ and `buildContextEntries` from an extension command to inspect an actual
 session instead of parsing JSONL manually at first. The standalone
 `buildSessionContext(entries, leafId?)` helper can also be imported and called
 with `ctx.sessionManager.getEntries()` and `ctx.sessionManager.getLeafId()`;
-it is not an instance method on `ctx.sessionManager`.
+the same operation is available as the `ctx.sessionManager.buildSessionContext()`
+instance method. See [From session history to provider requests](06-from-session-history-to-provider-requests.qmd#sec:message-formats)
+for the representation boundaries.
 
 **Outcome:** You can prove whether a context difference is persistence policy,
 compaction, branch navigation, or an extension's reconstruction mistake.

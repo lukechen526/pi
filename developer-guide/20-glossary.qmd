@@ -24,6 +24,13 @@ resources, prompts, tools, and extensions. It also manages retries, compaction,
 and persistence. See [Prompt lifecycle](#sec:prompt-lifecycle) and
 [Sessions](#sec:sessions).
 
+**AgentMessage**
+
+: The richer message union used by the agent and coding-agent layers. It can
+include canonical model messages plus coding-agent-specific custom, UI, and
+session-derived messages before `convertToLlm()` projects them. See [From
+session history to provider requests](06-from-session-history-to-provider-requests.qmd#sec:message-formats).
+
 **AgentSessionRuntime**
 
 : The lifecycle owner of the current AgentSession and its cwd-bound services,
@@ -64,6 +71,20 @@ and [Failure and recovery](#sec:failure).
 
 : Code that converts Pi's normalized request and response shapes into one
 provider's protocol format. See [Models, providers, and authentication](#sec:models).
+
+**Canonical `Message`**
+
+: The provider-neutral normalized message type in `packages/ai/src/types.ts`.
+It is the `messages` element type inside [`Context`](#sec:glossary), distinct
+from richer `AgentMessage` values and from any provider's serialized payload.
+See [From session history to provider requests](06-from-session-history-to-provider-requests.qmd#sec:message-formats).
+
+**Wire payload**
+
+: The adapter-specific serialized request body sent to a provider. It is built
+from normalized [`Context`](#sec:glossary) data and follows that provider's
+protocol; it is not the canonical `Message` or `Context` itself. See [Models,
+providers, and authentication](#sec:models).
 
 **Branch**
 
@@ -106,8 +127,11 @@ different from the compaction operation that creates it. See [Sessions](#sec:ses
 
 **Context**
 
-: The provider-facing bundle of system prompt, converted messages, and active
-tools. It is distinct from the broader persisted session. See [Prompt lifecycle](#sec:prompt-lifecycle).
+: The provider-facing `packages/ai` bundle of an optional system prompt,
+canonical `Message[]`, and optional normalized tools. It is distinct from both
+the richer `AgentMessage[]` list and the adapter-specific wire payload, as well
+as from the broader persisted session. See [Prompt lifecycle](#sec:prompt-lifecycle)
+and [From session history to provider requests](06-from-session-history-to-provider-requests.qmd#sec:message-formats).
 
 **Context window**
 

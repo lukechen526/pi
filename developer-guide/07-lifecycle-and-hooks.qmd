@@ -424,7 +424,8 @@ session APIs or session hooks when durable state is the goal.
 
 The resulting [`Context`](#sec:glossary) has exactly `systemPrompt`,
 `messages`, and `tools`. That shape lets the session persist rich UI-only
-entries while only a selected representation reaches the LLM.
+entries while only a selected representation reaches the LLM. For the complete
+Stage 5 representation path, see [From session history to provider requests](06-from-session-history-to-provider-requests.qmd#sec:message-formats).
 
 The three provider hooks then bracket the request itself, in this order:
 

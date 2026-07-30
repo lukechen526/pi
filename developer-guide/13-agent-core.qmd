@@ -13,7 +13,7 @@ The central source files are `packages/agent/src/agent.ts`,
 `src/agent-loop.ts`, and `src/types.ts`.
 
 For the coding-agent view of prompt/tool assembly and the high-level rule that
-continues or ends a run, start with [The agent loop in one picture](06-lifecycle-and-hooks.qmd#the-agent-loop-in-one-picture). This chapter supplies the implementation-level event, queue, snapshot, and concurrency detail behind that model.
+continues or ends a run, start with [The agent loop in one picture](07-lifecycle-and-hooks.qmd#the-agent-loop-in-one-picture). This chapter supplies the implementation-level event, queue, snapshot, and concurrency detail behind that model.
 
 ## The smallest useful mental model
 
@@ -255,7 +255,8 @@ AgentMessage[] context
 The low-level loop does not assume a provider has the same message shape as an
 agent message. `convertToLlm` belongs to the caller precisely because a coding
 agent may have session-only messages while another embedding has a different
-message representation.
+message representation. See [From session history to provider requests](06-from-session-history-to-provider-requests.qmd#sec:message-formats)
+for the coding-agent representation boundaries.
 
 On a provider `start` event, the loop pushes a partial assistant message into
 its current context and emits `message_start`. Text, thinking, and tool-call

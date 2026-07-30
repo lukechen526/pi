@@ -535,6 +535,10 @@ only when the model should receive it.
 
 ## Message shapes at the provider boundary
 
+For the full path from session history through `AgentMessage[]`, canonical
+`Message[]`, and adapter-specific payloads, see [From session history to
+provider requests](06-from-session-history-to-provider-requests.qmd#sec:message-formats).
+
 The `message` entry wraps an `AgentMessage`. Core roles are:
 
 ```text
@@ -568,16 +572,17 @@ groupings:
 | Append transcript (instance) | `appendMessage`, `appendModelChange`, `appendThinkingLevelChange` |
 | Append summaries/state (instance) | `appendCompaction`, `appendCustomEntry`, `appendCustomMessageEntry`, `appendLabelChange`, `appendSessionInfo` |
 | Navigate tree (instance) | `getLeafId`, `getBranch`, `getTree`, `getChildren`, `branch`, `resetLeaf`, `branchWithSummary` |
-| Build context | `buildContextEntries()` on the manager; standalone `buildSessionContext(entries, leafId?)` helper |
+| Build context | `buildContextEntries()` and `SessionManager.buildSessionContext()` instance methods; standalone `buildSessionContext(entries, leafId?)` helper |
 | Inspect metadata (instance) | `getHeader`, `getSessionName`, `getCwd`, `getSessionFile`, `isPersisted` |
 
 The manager owns the JSONL representation. Do not have an extension write a
 second, unrelated copy of the session file: it will not participate in branch
 or compaction semantics and may become inconsistent with the transcript.
 
-`buildContextEntries()` is available on `ctx.sessionManager`. The richer
-`buildSessionContext()` helper is standalone: import it and pass the manager's
-entries and leaf ID, or use the exposed manager methods to assemble the pieces.
+`buildContextEntries()` and `SessionManager.buildSessionContext()` are available
+on `ctx.sessionManager`. The standalone `buildSessionContext(entries, leafId?)`
+helper can also be imported and called with the manager's entries and leaf ID;
+the two forms expose the same context reconstruction boundary.
 
 ## Building context from a selected leaf
 

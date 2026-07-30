@@ -396,7 +396,9 @@ The older `src/compat.ts` `streamSimple()` remains a compatibility/default
 fallback for callers that do not supply an explicit stream function.
 
 Individual API adapters serialize messages/tools/system prompt into their wire
-format, parse streaming chunks, and emit normalized partial/final events. The
+format, parse streaming chunks, and emit normalized partial/final events. See
+[From session history to provider requests](06-from-session-history-to-provider-requests.qmd#sec:message-formats)
+for the representation boundaries that precede this adapter-specific work. The
 agent loop therefore does not need a branch for every vendor protocol.
 
 ## Payload and response hooks
