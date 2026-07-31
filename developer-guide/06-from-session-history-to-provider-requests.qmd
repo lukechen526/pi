@@ -57,7 +57,26 @@ every representation we will meet:
 3. A **tool result message**: the file contents, answering that tool call.
 4. A second **assistant message**: the one-sentence summary.
 
-Two structural facts make everything else in this chapter click into place:
+Here is that conversation at a glance, as Pi is about to send it to the
+provider. Throughout this chapter, indented outlines like this one show
+nesting — which object contains which — with values sketched, not literal:
+
+```text
+Context: one provider request
+  systemPrompt: "You are an expert coding assistant ..."
+  tools:        [ read, bash, edit, write ]  (name + description + schema)
+  messages:
+    user        "Read README.md and summarize it ..."
+    assistant   content blocks:
+                  toolCall   id: call_1, name: read, arguments: {path}
+    toolResult  toolCallId: call_1   (answers the call above)
+                  content: [ text: "# Pi ..." ]
+    assistant   content blocks:
+                  text   "README.md introduces the Pi ..."
+```
+
+Two structural facts in this picture make everything else in this chapter
+click into place:
 
 - **A conversation is a list of messages, and a message is a list of typed
   content blocks.** A message is never just a string. The assistant message
@@ -66,9 +85,10 @@ Two structural facts make everything else in this chapter click into place:
   tool calls at once. This is why every format below is built from small
   typed blocks rather than raw strings.
 - **Every tool call must be answered by exactly one tool result.** The call
-  carries an `id`; the result carries a `toolCallId` that equals it.
-  Providers reject transcripts that break this pairing with hard errors, so
-  Pi defends it at several layers (you will see where).
+  carries an `id`; the result carries a `toolCallId` that equals it — the
+  `call_1` pair in the outline. Providers reject transcripts that break this
+  pairing with hard errors, so Pi defends it at several layers (you will see
+  where).
 
 ## One conversation, four homes
 
@@ -244,6 +264,30 @@ sequenceDiagram
 
 ## From the session file to runtime messages {#sec:session-to-runtime}
 
+On disk, the same conversation looks like this — one JSON object per line,
+appended as the turn unfolds:
+
+```text
+session file: one JSON object per line, append-only
+  line 1:  header   { type: "session", version: 3, id, cwd }
+  line 2:  entry    { type: "message", id, parentId, timestamp,
+                      message: <the user message> }
+  line 3:  entry    { type: "message", id, parentId, timestamp,
+                      message: <assistant with the toolCall> }
+  line 4:  entry    { type: "message", id, parentId, timestamp,
+                      message: <the toolResult> }
+  line 5:  entry    { type: "message", id, parentId, timestamp,
+                      message: <assistant summary> }
+```
+
+The nesting is one level deeper than in the request: the file wraps every
+message in an **entry envelope** (`id`, `parentId`, `timestamp`), and it
+interleaves non-message entries (settings changes, labels, extension state)
+that never become context. The subsections below show how Pi reads this file
+tolerantly, selects one branch from it, applies compaction, and projects the
+result into the runtime transcript. (One real line appears literally in
+"One message, three shapes" below.)
+
 ### Parsing: tolerant by design
 
 `parseSessionEntries()` in `session-manager.ts` splits the file on newlines
@@ -384,13 +428,23 @@ the timestamp is Unix milliseconds.
 ## Pi's canonical message format {#sec:canonical-messages}
 
 The `AgentMessage[]` list is still coding-agent-shaped — it can contain
-`bashExecution`, `custom`, `branchSummary`, and `compactionSummary` roles,
-added to the `agent` package's `CustomAgentMessages` interface by declaration
-merging in `packages/coding-agent/src/core/messages.ts`. (Declaration merging
-is TypeScript's way of letting another package add members to an interface —
-`packages/agent` stays generic while the coding agent registers its own
-roles.) The provider layer must not know about any of that. Pi's exchange
-format is the smaller `Message` union in `packages/ai/src/types.ts`:
+app-specific roles alongside the canonical ones:
+
+```text
+AgentMessage: any canonical Message, plus app-specific roles
+  bashExecution       a bash run: command, output, exitCode
+  custom              an extension-injected message
+  branchSummary       summary of an abandoned branch
+  compactionSummary   summary replacing compacted history
+```
+
+These roles are added to the `agent` package's `CustomAgentMessages`
+interface by declaration merging in
+`packages/coding-agent/src/core/messages.ts`. (Declaration merging is TypeScript's way of letting another
+package add members to an interface — `packages/agent` stays generic while
+the coding agent registers its own roles.) The provider layer must not know
+about any of that. Pi's exchange format is the smaller `Message` union in
+`packages/ai/src/types.ts`:
 
 ```ts
 export type Message = UserMessage | AssistantMessage | ToolResultMessage;
@@ -398,18 +452,24 @@ export type Message = UserMessage | AssistantMessage | ToolResultMessage;
 
 Three roles, each a plain interface:
 
-- **`UserMessage`** (`role: "user"`): `content` is a string or an array of
-  `TextContent`/`ImageContent` blocks, plus a `timestamp`.
-- **`AssistantMessage`** (`role: "assistant"`): `content` is an array of
-  typed blocks — `TextContent`, `ThinkingContent` (with an optional
-  `thinkingSignature` for replay), or `ToolCall`. It also carries `api`,
-  `provider`, and `model` (which produced it), `usage` (token counts and
-  cost), a `stopReason`, an optional `errorMessage`, and a `timestamp`.
-  `stopReason` is one of `"stop"`, `"length"`, `"toolUse"`, `"error"`,
-  `"aborted"`.
-- **`ToolResultMessage`** (`role: "toolResult"`): `toolCallId`, `toolName`,
-  `content` (text/image blocks), an `isError` flag, optional structured
-  `details` for UI rendering, and a `timestamp`.
+```text
+UserMessage        role: "user"
+                   content: string, or [ TextContent, ImageContent ]
+                   timestamp
+AssistantMessage   role: "assistant"
+                   content: [ TextContent | ThinkingContent | ToolCall ]
+                   api, provider, model, usage, stopReason, timestamp
+ToolResultMessage  role: "toolResult"
+                   toolCallId, toolName, isError, timestamp
+                   content: [ TextContent, ImageContent ]
+```
+
+The outline omits three semantic details: `ThinkingContent` carries an
+optional `thinkingSignature` so reasoning can be replayed to the same model;
+`stopReason` is one of `"stop"`, `"length"`, `"toolUse"`, `"error"`,
+`"aborted"`, with an optional `errorMessage` on the failure cases; and
+`ToolResultMessage` can carry structured `details` for UI rendering that
+never affect the model.
 
 All timestamps are Unix milliseconds. Content blocks are discriminated unions
 — every block has a `type` field (`"text"`, `"thinking"`, `"image"`,
