@@ -11,29 +11,28 @@ append-only record on disk owns the history; every other copy — the runtime
 transcript the loop works on, each request sent to a provider — is derived
 from it and can be rebuilt at any time.
 
-But one list has four jobs with conflicting demands. Disk needs durability
-across restarts. The running loop needs a shape it can append to, stream,
-and render. Each request needs economy: exactly what the model needs for
-this call, nothing that wastes tokens. And the wire must obey the provider's
-API to the letter. No single shape serves all four, so Pi re-expresses the
-conversation at each boundary — and each boundary has exactly one converting
-function. Each re-expression is a **representation**: the same conversation,
-shaped for one layer of the system. This chapter maps the representations
-and the functions that carry the conversation across.
+That one list lives in several places at once, and each place needs a
+different shape of it. Each re-expression is a **representation**: the same
+conversation, shaped for one layer of the system. This chapter maps the
+representations and the functions that carry the conversation across.
 
 This chapter answers three questions:
 
 1. **Why does Pi keep its own message format at all**, instead of storing and
    passing around, say, OpenAI's format? (Answered in [Why Pi has its own
-   message representation](#sec:why-canonical).)
+   message representation](#sec:why-canonical), after the walk, where the
+   evidence is.)
 2. **What does each representation look like?** We will read the actual
    TypeScript types — no guessing what a "message" is.
 3. **Which function performs each conversion?** Every boundary has exactly
    one, and knowing them tells you where to hook in as an extension author.
 
 Questions 2 and 3 are answered together as we walk the pipeline from disk to
-provider and back, starting at [Six representations, one
-conversation](#sec:six-representations).
+provider and back — the section headings after [Six representations, one
+conversation](#sec:six-representations) *are* the walk. One note on how to
+read them: the walk is the spine, six boundary sections in pipeline order.
+Tables and the master map are references — revisit them, don't memorize
+them. Each boundary section opens with a summary block; the details follow.
 
 ## Prerequisites
 
@@ -45,7 +44,7 @@ package owns which layer. Terminology is in the
 [glossary](20-glossary.qmd#sec:glossary).
 
 Every path below is relative to the Pi monorepo root. The chapter is grounded
-in five files:
+in four files and a directory:
 
 - `packages/coding-agent/src/core/session-manager.ts` — the session file and
   context reconstruction.
@@ -65,9 +64,9 @@ concrete exchange from disk to provider and back. You run `pi` and type:
 > Read README.md and summarize it in one sentence.
 
 The model calls the `read` tool, Pi executes it and returns the file
-contents, and the model answers with a summary. That is **one turn**, and it
-produces a conversation with this basic structure — the same structure in
-every representation we will meet:
+contents, and the model answers with a summary. That exchange produces a
+conversation with this basic structure — the same structure in every
+representation we will meet:
 
 1. A **user message**: your prompt text.
 2. An **assistant message**: not plain text, but a request to call `read`
@@ -80,7 +79,7 @@ provider. Throughout this chapter, indented outlines like this one show
 nesting — which object contains which — with values sketched, not literal:
 
 ```text
-Context: one provider request
+Context: one provider request   (you will meet the Context type at Boundary 2)
   systemPrompt: "You are an expert coding assistant ..."
   tools:        [ read, bash, edit, write ]  (name + description + schema)
   messages:
@@ -108,45 +107,26 @@ click into place:
   pairing with hard errors, so Pi defends it at several layers (you will see
   where).
 
-The outline above is sketched; the artifacts are real. On disk — the first
-of the four homes you are about to meet — the user message is already
-written by the time the model answers. It is one line in the session file,
-wrapped in an **entry envelope** (`id`, `parentId`, `timestamp`) that links
-it into the session tree (shown pretty-printed; real lines have no
-whitespace):
-
-```json
-{
-  "type": "message",
-  "id": "3f9a1c82",
-  "parentId": "e17b04d6",
-  "timestamp": "2026-07-30T14:02:11.421Z",
-  "message": {
-    "role": "user",
-    "content": "Read README.md and summarize it in one sentence.",
-    "timestamp": 1752420131000
-  }
-}
-```
-
-Notice the two timestamps and the envelope — [The same message on disk, in
-memory, and in a request](#sec:three-shapes) puts this line side by side
-with its other shapes, and the last section of the chapter appends the
-assistant's answer as a line just like it.
+The outline above is sketched; the artifacts are real. You will see this
+exact user message as a line on disk in [The same message in three
+shapes](#sec:three-shapes), and the last boundary appends the assistant's
+answer as a line just like it.
 
 ## Where the conversation lives
 
 Before comparing formats, it helps to see *where* the conversation actually
 lives. At any moment, our README.md exchange exists in up to four places at
-once — and each place has a different job, which is why each keeps the
-conversation in a different shape.
+once — and each place has a different job with conflicting demands, which is
+why each keeps the conversation in a different shape. No single shape serves
+all four jobs, so Pi re-expresses the conversation at each boundary — and
+each boundary has exactly one converting function.
 
 **On disk: the durable copy.** Every message, tool call, and tool result is
 appended to a session file (one JSON object per line, called JSONL) under
-`~/.pi/agent/sessions/`. This copy's job is **durability**: it must survive
-restarts and crashes, power `/resume` next week, and keep abandoned branches
-for `/tree`. It is the only copy that owns history — the others are derived
-from it and can be rebuilt at any time.
+`~/.pi/agent/sessions/` (one subdirectory per project). This copy's job is
+**durability**: it must survive restarts and crashes, power `/resume` next
+week, and keep abandoned branches for `/tree`. It is the only copy that owns
+history — the others are derived from it and can be rebuilt at any time.
 
 **In memory: the working copy.** While the agent runs, it operates on a plain
 in-memory list of message objects. This copy's job is **execution**: the loop
@@ -197,77 +177,16 @@ flowchart LR
 
 Three of these homes are Pi's to design; the wire is not. So why doesn't Pi
 borrow the provider's format for its own three and skip the conversions
-entirely? That is a real option — and the next section explains why Pi
-rejected it.
-
-## Why Pi has its own message representation {#sec:why-canonical}
-
-This section answers question 1 from the intro.
-
-::: {.callout-note}
-## Skippable on first read
-This section explains why Pi owns a message format at all. If you would
-rather see the representations first, jump ahead to [Six representations, one
-conversation](#sec:six-representations) and come back later.
-:::
-
-Wouldn't it be simpler to keep the provider's shape in all four homes and
-pass it straight through? Four reasons explain the architecture.
-
-### Providers disagree about the basics
-
-There is no standard for how a conversation is encoded. Two providers Pi
-supports — chosen because they are the most common — already differ on the
-fundamentals:
-
-| Design question | OpenAI (Chat Completions) | Anthropic (Messages) |
-|---|---|---|
-| Tool-call arguments | JSON **string**, must be parsed | Structured `input` **object** |
-| Tool result's role | Dedicated `tool` role | A `tool_result` block inside a **`user`** message |
-| Result's key field | `tool_call_id` | `tool_use_id` |
-| Streaming | Delta objects per chunk | Typed content-block events |
-| Reasoning output | Model-specific fields | Signed `thinking` blocks |
-
-If Pi's session file or agent loop spoke one provider's dialect, switching
-models mid-session would corrupt the transcript — and Pi explicitly allows
-switching (`/model`, and `model_change` entries in the session file). A
-history stored as Anthropic `tool_use` blocks cannot be sent to OpenAI
-as-is; a history stored as OpenAI `tool` messages cannot be sent to
-Anthropic. Something in the middle must keep the conversation neutral.
-
-### One hub, not a translator per pair
-
-Pi supports more than a dozen provider APIs — one adapter file each under
-`packages/ai/src/api/`. With a canonical hub format, adding a provider means
-writing **one adapter**: canonical messages to wire JSON on the way out,
-wire chunks to canonical events on the way in. Without the hub, every
-feature that produces or consumes messages — the session store, compaction,
-extension-injected messages, the TUI — would need its own converter per
-provider. The hub turns an N×M problem — every feature that produces or
-consumes messages, times every provider — into an N problem.
-
-### The session file outlives provider APIs
-
-A session file is a long-lived artifact: you can `/resume` a conversation
-next week, branch it with `/tree` next month. Provider APIs, meanwhile,
-version and deprecate constantly. If the durable record were provider JSON,
-every provider migration would threaten every saved session. Keeping the
-file in Pi's own format means provider changes are absorbed by one adapter
-file, never by migrating your history.
-
-### Each boundary drops information on purpose
-
-The corollary of layered representations is that each conversion is
-**one-directional and lossy by design**. Durable-only fields — extension
-state, labels, thinking-level changes — never reach the provider, so they
-never cost tokens or leak into someone else's logs. Provider quirks — ID
-formats, role constraints — never leak back into the session file, so the
-file stays valid for whichever model handles the next turn.
+entirely? That is a real option — hold the question. The walk gives you the
+evidence, and [Why Pi has its own message
+representation](#sec:why-canonical) answers it.
 
 ## Six representations, one conversation {#sec:six-representations}
 
 The same conversation exists in these shapes at different moments. Paths are
-relative to `packages/` (`core/` means `packages/coding-agent/src/core/`):
+relative to `packages/` (`core/` means `packages/coding-agent/src/core/`).
+Don't memorize these six rows — each gets its own boundary section, and the
+walk reintroduces it with an example:
 
 | Representation | Defined in | What it is | Why it exists |
 |---|---|---|---|
@@ -287,8 +206,8 @@ across, numbered in the order the rest of the chapter walks them.
 
 ```{mermaid}
 %%| label: fig-type-chain
-%%| fig-cap: "The type chain: one conversation carried across six boundaries. Each node is a representation; each numbered edge is the one function that crosses that boundary. Edges 3 and 4 share an arrow — both run inside the adapter — and edge 6 loops back to `SessionEntry`."
-%%| fig-width: 3.0
+%%| fig-cap: "The type chain: one conversation carried across six boundaries. Nodes are representations; numbered edges are the one function that crosses that boundary (edges 3 and 4 share an arrow — both run inside the adapter). Edge 5's events arrive on the provider's response stream; edge 6 persists the finished AssistantMessage, not the events."
+%%| fig-width: 3.3
 %%| fig-pos: "H"
 flowchart TD
   SE["SessionEntry<br/>core/session-manager.ts"] -->|"1 · buildSessionContext()"| AM["AgentMessage<br/>agent/src/types.ts"]
@@ -296,54 +215,25 @@ flowchart TD
   MSG -->|"request assembly"| CTX["Context<br/>ai/src/types.ts"]
   CTX -->|"3 · transformMessages()<br/>4 · adapter convertMessages()"| PAY["wire payload<br/>ai/src/api/*.ts"]
   PAY -->|"5 · adapter event translation"| EVT["AssistantMessageEvent<br/>ai/src/types.ts"]
-  EVT -->|"6 · appendMessage()"| SE
+  EVT -->|"stream resolves to<br/>AssistantMessage"| AM
+  AM -->|"6 · appendMessage()<br/>on message_end"| SE
 ```
 
-The rest of the chapter walks these edges in order. Each crossing opens with
+One edge is deliberately unnumbered. Request assembly (`Message[] →
+Context`) groups fields — it converts nothing, so it gets no boundary block
+of its own; the `Context` interface arrives with Boundary 2, where
+`convertToLlm()`'s output lands. The section headings ahead *are* this map:
+Boundaries 1–6 in order, outbound first, then back. Each crossing opens with
 a **boundary block** — the type transition, the exact function and its file,
 what the conversion adds, and what it deliberately leaves behind — followed
 by a concrete before-and-after from the running example.
 
-## The pipeline in one picture
+## Outbound: from disk to the provider
 
-@fig-representation-pipeline compresses the chapter into one round
-trip: follow the arrows left to right on the way out, right to left on the
-way back. It is the process view of @fig-type-chain — same boundaries, same
-functions, shown as participants exchanging messages rather than types
-linked by edges.
-
-```{mermaid}
-%%| label: fig-representation-pipeline
-%%| fig-cap: "One prompt's round trip through the representation pipeline. Outbound arrows (top) name the exact converting function; inbound arrows (bottom) carry the streamed response back to the session file. The boundary blocks in the rest of this chapter follow the same order as these arrows."
-%%| fig-width: 6.2
-%%| fig-pos: "H"
-sequenceDiagram
-  participant F as session file<br/>(JSONL)
-  participant S as SessionManager
-  participant A as agent loop
-  participant D as ai adapter
-  participant P as provider
-  F->>S: parseSessionEntries() → FileEntry[]
-  S->>A: buildSessionContext() → AgentMessage[]
-  A->>D: convertToLlm() → Context
-  D->>D: transformMessages()
-  D->>P: convertMessages() → provider JSON
-  P->>D: SSE chunks → AssistantMessageEvent
-  D->>A: stream done → AssistantMessage
-  A->>S: message_end
-  S->>F: appendMessage() → new JSONL line
-```
-
-Two labels deserve a gloss. A `FileEntry` is simply one file line: the
-header or one `SessionEntry` — `parseSessionEntries()` returns `FileEntry[]`
-because it reads the header too, and the rest of this chapter works with the
-`SessionEntry` kind. And SSE is Server-Sent Events, the HTTP convention of
-streaming a response as a series of text chunks.
-
-## From the session file to runtime messages {#sec:session-to-runtime}
+### Boundary 1 — `SessionEntry` → `AgentMessage` {#sec:boundary-1}
 
 On disk, the same conversation looks like this — one JSON object per line,
-appended as the turn unfolds (a nesting outline; values sketched, not
+appended as the exchange unfolds (a nesting outline; values sketched, not
 literal):
 
 ```text
@@ -362,37 +252,44 @@ session file: one JSON object per line, append-only
 The nesting is one level deeper than in the request: the file wraps every
 message in an **entry envelope** (`id`, `parentId`, `timestamp`), and it
 interleaves non-message entries (settings changes, labels, extension state)
-that never become context. The subsections below show how Pi reads this file
-tolerantly, selects one branch from it, applies compaction, and projects the
-result into the runtime transcript. (You have already seen one real line in
-the running example; [The same message on disk, in memory, and in a
-request](#sec:three-shapes) puts all three of its shapes side by side.)
+that never become context.
 
-### Parsing: tolerant by design
+**Parsing, tolerant by design.** The first line must be the `type: "session"`
+header; older files are migrated in place to the current version
+(`CURRENT_SESSION_VERSION = 3`; version 2 added the `id`/`parentId` tree
+structure, version 3 renamed the old `hookMessage` role to `custom`).
+`SessionManager` reads the file in chunks and `JSON.parse`s each line;
+**malformed lines are skipped, not fatal**. The why: the file is an
+append-only log, and appends can be torn — a crash or a `kill` can leave a
+half-written final line. Tolerating that line is what keeps a crashed
+session resumable instead of unreadable. The practical rule: read sessions
+through `SessionManager`, never by assuming every line parses or matches the
+newest version.
 
-`parseSessionEntries()` in `session-manager.ts` splits the file on newlines
-and `JSON.parse`s each line; **malformed lines are skipped, not fatal**
-(`loadEntriesFromFile()` does the same while streaming the file in chunks).
-The why: the file is an append-only log, and appends can be torn — a crash or
-a `kill` can leave a half-written final line. Tolerating that line is what
-keeps a crashed session resumable instead of unreadable.
-
-The first line must be the `type: "session"` header; older files are migrated
-in place to the current version (`CURRENT_SESSION_VERSION = 3`), which adds
-the `id`/`parentId` tree structure and renames the old `hookMessage` role to
-`custom`. The practical rule: read sessions through `SessionManager`, never
-by assuming every line parses or matches the newest version.
-
-### Selecting a branch, applying compaction
-
-Every entry after the header shares the same base shape:
+Every entry after the header shares the same base shape, and the file's
+lines are typed as a union over the header and all entry kinds
+(`session-manager.ts`):
 
 ```ts
+/** Raw file entry (includes header) */
+export type FileEntry = SessionHeader | SessionEntry;
+
+export type SessionEntry =
+	| SessionMessageEntry
+	| ThinkingLevelChangeEntry
+	| ModelChangeEntry
+	| CompactionEntry
+	| BranchSummaryEntry
+	| CustomEntry
+	| CustomMessageEntry
+	| LabelEntry
+	| SessionInfoEntry;
+
 export interface SessionEntryBase {
-  type: string;
-  id: string;
-  parentId: string | null;
-  timestamp: string;   // ISO 8601
+	type: string;
+	id: string;
+	parentId: string | null;
+	timestamp: string;
 }
 ```
 
@@ -415,16 +312,19 @@ compaction is a projection, not an edit. The full mechanics are in
 compaction](03-sessions-trees-compaction.qmd#sec:sessions).
 :::
 
-### Projecting entries to messages
-
 **Boundary 1 of 6 — `SessionEntry[]` → `AgentMessage[]`** (edge 1 in
 @fig-type-chain).
 *Type chain:* **`SessionEntry` → `AgentMessage`** → `Message` → `Context` →
 wire payload → `AssistantMessageEvent` → (back to) `SessionEntry`.
 
 ```ts
-buildSessionContext(entries, leafId?): SessionContext
-sessionEntryToContextMessages(entry): AgentMessage[]
+export function buildSessionContext(
+	entries: SessionEntry[],
+	leafId?: string | null,
+	byId?: Map<string, SessionEntry>,
+): SessionContext;
+
+export function sessionEntryToContextMessages(entry: SessionEntry): AgentMessage[];
 ```
 
 Both in `packages/coding-agent/src/core/session-manager.ts`.
@@ -440,7 +340,7 @@ context" rule is enforced:
 | `message` | Yes | The stored `AgentMessage` passes through (null content repaired to `[]`) |
 | `custom_message` | Yes | Converted to a `CustomMessage` via `createCustomMessage()` |
 | `compaction` | Yes | Converted to a `CompactionSummaryMessage` |
-| `branch_summary` | Yes | Converted to a `BranchSummaryMessage` |
+| `branch_summary` | Yes | Converted to a `BranchSummaryMessage` (when a summary exists) |
 | `thinking_level_change` | No | Restores loop state (thinking level), not a message |
 | `model_change` | No | Restores loop state (model selection), not a message |
 | `custom` | No | Durable extension state only (`pi.appendEntry()`); ignored here |
@@ -455,7 +355,7 @@ state entry sits in the file like any other line:
   "type": "custom",
   "id": "8c1f0a2b",
   "parentId": "3f9a1c82",
-  "timestamp": "2026-07-30T14:01:02.100Z",
+  "timestamp": "2025-07-13T15:22:12.100Z",
   "customType": "my-extension.state",
   "data": { "lastRun": 1752420062000 }
 }
@@ -464,15 +364,15 @@ state entry sits in the file like any other line:
 `sessionEntryToContextMessages()` returns an empty array for it: the entry
 survives `/resume` and `/tree`, and never costs a token of model context.
 
-`buildSessionContext()` ties it together: it walks the path once to recover
-the current thinking level and model, then flat-maps the compaction-aware
-entry list through `sessionEntryToContextMessages()`. The result is:
+`buildSessionContext()` ties it together: it walks the path to recover the
+current thinking level and model, then flat-maps the compaction-aware entry
+list through `sessionEntryToContextMessages()`. The result is:
 
 ```ts
 export interface SessionContext {
-  messages: AgentMessage[];   // runtime transcript for the agent loop
-  thinkingLevel: string;
-  model: { provider: string; modelId: string } | null;
+	messages: AgentMessage[];
+	thinkingLevel: string;
+	model: { provider: string; modelId: string } | null;
 }
 ```
 
@@ -480,128 +380,159 @@ Note what just happened: nine entry kinds collapsed into messages plus two
 settings. An extension's private `custom` entries survive resume and `/tree`
 without ever reaching the model.
 
-### The same message on disk, in memory, and in a request {#sec:three-shapes}
+### Boundary 2 — `AgentMessage` → `Message` {#sec:boundary-2}
 
-To see the first boundary concretely, here is our example prompt in its
-three shapes so far — three of the six representations from [Six
-representations, one conversation](#sec:six-representations):
-`SessionEntry`, `AgentMessage`, and `Message` sitting inside a `Context`. On
-disk, the user message is the JSONL line you already met in the running
-example (shown pretty-printed; real lines have no whitespace):
+**Boundary 2 of 6 — `AgentMessage[]` → `Message[]`** (edge 2 in
+@fig-type-chain).
+*Type chain:* `SessionEntry` → **`AgentMessage` → `Message`** → `Context` →
+wire payload → `AssistantMessageEvent` → (back to) `SessionEntry`.
 
-```json
-{
-  "type": "message",
-  "id": "3f9a1c82",
-  "parentId": "e17b04d6",
-  "timestamp": "2026-07-30T14:02:11.421Z",
-  "message": {
-    "role": "user",
-    "content": "Read README.md and summarize it in one sentence.",
-    "timestamp": 1752420131000
-  }
+```ts
+export function convertToLlm(messages: AgentMessage[]): Message[];
+```
+
+`packages/coding-agent/src/core/messages.ts`.
+**Adds:** canonical roles for app-specific messages.
+**Leaves behind:** excluded bash runs, unknown kinds.
+
+The agent loop never converts messages itself; `AgentLoopConfig.convertToLlm`
+is a required callback (`packages/agent/src/types.ts`):
+
+```ts
+convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
+```
+
+The why: this keeps `packages/agent` app-agnostic — the loop orchestrates
+prompts, tools, and events without knowing that bash executions or
+compaction summaries exist. Coding-agent wires the callback to
+`convertToLlm()` in `core/messages.ts` (wrapped in `core/sdk.ts` to replace
+images with a placeholder when image reading is disabled).
+
+**The input side.** `AgentMessage` is the canonical `Message` union plus
+whatever an application registers on the `CustomAgentMessages` interface —
+empty by default, so apps can extend it via *declaration merging*
+(TypeScript's way of letting another package add members to an interface —
+`packages/agent` stays generic while the coding agent registers its own
+roles):
+
+```ts
+// packages/agent/src/types.ts
+export interface CustomAgentMessages {
+	// Empty by default - apps extend via declaration merging
+}
+
+export type AgentMessage = Message | CustomAgentMessages[keyof CustomAgentMessages];
+
+// packages/coding-agent/src/core/messages.ts
+declare module "@earendil-works/pi-agent-core" {
+	interface CustomAgentMessages {
+		bashExecution: BashExecutionMessage;
+		custom: CustomMessage;
+		branchSummary: BranchSummaryMessage;
+		compactionSummary: CompactionSummaryMessage;
+	}
 }
 ```
 
-After `buildSessionContext()`, the envelope is gone and the inner object
-joins the runtime transcript as an `AgentMessage`:
+So inside the coding agent, an `AgentMessage` is any canonical message, or a
+`bashExecution` (a bash run: command, output, exitCode), a `custom` message
+(extension-injected), a `branchSummary`, or a `compactionSummary`. The
+provider layer must not know about any of that.
 
-```json
-{
-  "role": "user",
-  "content": "Read README.md and summarize it in one sentence.",
-  "timestamp": 1752420131000
-}
-```
-
-After `convertToLlm()` (next sections), the same message sits inside a
-`Context` as a canonical `UserMessage` — structurally unchanged, because
-user messages are already canonical:
-
-```json
-{
-  "systemPrompt": "You are an expert coding assistant ...",
-  "messages": [
-    {
-      "role": "user",
-      "content": "Read README.md and summarize it in one sentence.",
-      "timestamp": 1752420131000
-    }
-  ],
-  "tools": [ "..." ]
-}
-```
-
-Spot the difference across the three shapes: the payload never changes, only
-the wrapping. The entry adds tree links and an ISO timestamp for durability;
-the runtime and canonical shapes keep only what a model request needs, where
-the timestamp is Unix milliseconds.
-
-## Pi's canonical message format {#sec:canonical-messages}
-
-The `AgentMessage[]` list is still coding-agent-shaped — it can contain
-app-specific roles alongside the canonical ones (nesting outline; values
-sketched, not literal):
-
-```text
-AgentMessage: any canonical Message, plus app-specific roles
-  bashExecution       a bash run: command, output, exitCode
-  custom              an extension-injected message
-  branchSummary       summary of an abandoned branch
-  compactionSummary   summary replacing compacted history
-```
-
-These roles are added to the `agent` package's `CustomAgentMessages`
-interface by declaration merging in
-`packages/coding-agent/src/core/messages.ts`. (Declaration merging is TypeScript's way of letting another
-package add members to an interface — `packages/agent` stays generic while
-the coding agent registers its own roles.) The provider layer must not know
-about any of that. Pi's exchange format is the smaller `Message` union in
-`packages/ai/src/types.ts`:
+**The output side.** Pi's exchange format is the smaller `Message` union in
+`packages/ai/src/types.ts` — three roles, each a plain interface:
 
 ```ts
 export type Message = UserMessage | AssistantMessage | ToolResultMessage;
+
+export interface UserMessage {
+	role: "user";
+	content: string | (TextContent | ImageContent)[];
+	timestamp: number; // Unix timestamp in milliseconds
+}
+
+export interface AssistantMessage {
+	role: "assistant";
+	content: (TextContent | ThinkingContent | ToolCall)[];
+	api: Api;
+	provider: ProviderId;
+	model: string;
+	responseModel?: string;
+	responseId?: string;
+	diagnostics?: AssistantMessageDiagnostic[];
+	usage: Usage;
+	stopReason: StopReason;
+	errorMessage?: string;
+	timestamp: number; // Unix timestamp in milliseconds
+}
+
+export interface ToolResultMessage<TDetails = any> {
+	role: "toolResult";
+	toolCallId: string;
+	toolName: string;
+	content: (TextContent | ImageContent)[];
+	details?: TDetails;
+	usage?: Usage;
+	addedToolNames?: string[];
+	isError: boolean;
+	timestamp: number; // Unix timestamp in milliseconds
+}
 ```
 
-Three roles, each a plain interface:
+The content blocks are **discriminated unions** — a union where every
+variant carries a shared literal field you can `switch` on. Here every block
+has a `type` field, so a `switch` on `block.type` is exhaustive:
 
-```text
-UserMessage        role: "user"
-                   content: string, or [ TextContent, ImageContent ]
-                   timestamp
-AssistantMessage   role: "assistant"
-                   content: [ TextContent | ThinkingContent | ToolCall ]
-                   api, provider, model, usage, stopReason, timestamp
-ToolResultMessage  role: "toolResult"
-                   toolCallId, toolName, isError, timestamp
-                   content: [ TextContent, ImageContent ]
+```ts
+export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
+
+export interface TextContent {
+	type: "text";
+	text: string;
+	textSignature?: string;
+}
+
+export interface ThinkingContent {
+	type: "thinking";
+	thinking: string;
+	thinkingSignature?: string;
+	redacted?: boolean;
+}
+
+export interface ImageContent {
+	type: "image";
+	data: string; // base64 encoded image data
+	mimeType: string;
+}
+
+export interface ToolCall {
+	type: "toolCall";
+	id: string;
+	name: string;
+	arguments: Record<string, any>;
+	thoughtSignature?: string;
+}
 ```
 
-The outline omits three semantic details: `ThinkingContent` carries an
-optional `thinkingSignature` so reasoning can be replayed to the same model;
-`stopReason` is one of `"stop"`, `"length"`, `"toolUse"`, `"error"`,
-`"aborted"`, with an optional `errorMessage` on the failure cases; and
-`ToolResultMessage` can carry structured `details` for UI rendering that
-never affect the model.
-
-All timestamps are Unix milliseconds. Content blocks are **discriminated
-unions** — a union where every variant carries a shared literal field you
-can `switch` on. Here every block has a `type` field (`"text"`,
-`"thinking"`, `"image"`, `"toolCall"`), so a `switch` on `block.type` is
-exhaustive. This is why the format can stay provider-neutral: reasoning,
-images, and tool calls are first-class blocks, not provider-specific JSON
-fragments.
+Three semantic details the signatures only hint at: `thinkingSignature`
+carries an opaque token so reasoning can be replayed to the same model;
+`errorMessage` is set on the `"error"` and `"aborted"` stop reasons; and
+`details` on a tool result holds structured data for UI rendering that never
+affects the model. This is why the format can stay provider-neutral:
+reasoning, images, and tool calls are first-class blocks, not
+provider-specific JSON fragments.
 
 The design pays off directly in the tool-call invariant from the running
 example: **every `ToolCall` block's `id` must be answered by a
 `ToolResultMessage` whose `toolCallId` equals it.** Providers enforce this
 pairing with hard errors, and Pi enforces it itself in `transformMessages()`
-(below), which inserts synthetic `"No result provided"` error results for
-orphaned calls rather than send an invalid transcript.
+(Boundary 3), which inserts synthetic `"No result provided"` error results
+for orphaned calls rather than send an invalid transcript.
 
-Here is the entire running example in this format — the complete canonical
-`Message[]` (real assistant messages additionally carry `api`, `provider`,
-`model`, and `usage`; omitted here so the structure stands out):
+**The running example, canonical.** Here is the entire exchange in this
+format — the complete canonical `Message[]` (real assistant messages
+additionally carry `api`, `provider`, `model`, and `usage`; omitted here so
+the structure stands out):
 
 ```json
 [
@@ -643,55 +574,9 @@ Here is the entire running example in this format — the complete canonical
 ```
 
 Read it against the four-step structure from earlier: user, assistant tool
-call, tool result, assistant answer. This array is what lands in a `Context`
-as `messages` — exactly one request's worth of canonical state:
+call, tool result, assistant answer.
 
-```ts
-export interface Context {
-  systemPrompt?: string;
-  messages: Message[];   // the canonical union above
-  tools?: Tool[];        // name, description, TypeBox parameter schema
-}
-```
-
-`Tool` parameter schemas are written with
-[TypeBox](20-glossary.qmd#sec:glossary), which keeps them JSON
-Schema-compatible for every provider adapter.
-
-### Data, not classes
-
-None of the message formats are classes. `SessionEntry`, `AgentMessage`,
-`Message`, `Context`, and `AssistantMessageEvent` are plain-object interfaces
-and type unions — data with no methods. You construct them as object literals
-(or with small factories such as `createCompactionSummaryMessage()`), you can
-`JSON.stringify` them as-is, and tests build them as fixtures without
-instantiating machinery. The only runtime classes in this story are three:
-`SessionManager` owns the file, `Agent` owns the running loop, and
-`AssistantMessageEventStream` carries the response. There is no `Message`
-class to instantiate or subclass.
-
-## From canonical messages to provider JSON {#sec:canonical-to-wire}
-
-Three steps carry the conversation from canonical messages to provider JSON
-— boundaries 2, 3, and 4 on @fig-type-chain, each in a different package.
-
-**Boundary 2 of 6 — `AgentMessage[]` → `Message[]`** (edge 2 in
-@fig-type-chain).
-*Type chain:* `SessionEntry` → **`AgentMessage` → `Message`** → `Context` →
-wire payload → `AssistantMessageEvent` → (back to) `SessionEntry`.
-
-`convertToLlm(messages: AgentMessage[]): Message[]` —
-`packages/coding-agent/src/core/messages.ts`.
-**Adds:** canonical roles for app-specific messages.
-**Leaves behind:** excluded bash runs, unknown kinds.
-
-The agent loop never converts messages itself; `AgentLoopConfig.convertToLlm`
-(`packages/agent/src/types.ts`) is a required callback. The why: this keeps
-`packages/agent` app-agnostic — the loop orchestrates prompts, tools, and
-events without knowing that bash executions or compaction summaries exist.
-Coding-agent wires the callback to `convertToLlm()` in `core/messages.ts`
-(wrapped in `core/sdk.ts` to strip images when configured). It is a pure
-projection:
+**The projection in action.** `convertToLlm()` is a pure projection:
 
 - `user`, `assistant`, `toolResult` — pass through unchanged.
 - `bashExecution` — becomes a user message whose text is
@@ -701,10 +586,8 @@ projection:
 - `branchSummary` / `compactionSummary` — become user messages with the
   summary wrapped in an explanatory prefix/suffix.
 
-Anything else is filtered out. The result is the canonical `Message[]`.
-
-One projection in miniature — a `!`-command bash run crosses the boundary
-like this:
+Anything else is filtered out. One projection in miniature — a `!`-command
+bash run crosses the boundary like this:
 
 ```json
 {
@@ -718,13 +601,14 @@ like this:
 }
 ```
 
-becomes a plain user message whose text `bashExecutionToText()` renders (the
-`\n`s are newlines in the real string):
+becomes a plain user message whose text `bashExecutionToText()` renders as a
+single text block (the `\n`s are newlines in the real string):
 
 ```json
 {
   "role": "user",
-  "content": "Ran `git status --short`\n```\n M README.md\n\n```",
+  "content": [{ "type": "text",
+    "text": "Ran `git status --short`\n```\n M README.md\n\n```" }],
   "timestamp": 1752420142000
 }
 ```
@@ -732,29 +616,137 @@ becomes a plain user message whose text `bashExecutionToText()` renders (the
 A coding-agent-only role the provider layer never learns about, flattened
 into text the model reads like any user note.
 
+**The container.** The canonical array lands in a `Context` as `messages` —
+exactly one request's worth of canonical state. This is request assembly,
+the unnumbered edge on @fig-type-chain: it groups fields, converts nothing:
+
+```ts
+export interface Tool<TParameters extends TSchema = TSchema> {
+	name: string;
+	description: string;
+	parameters: TParameters;
+	constrainedSampling?: false | ConstrainedSamplingConfig;
+}
+
+export interface Context {
+	systemPrompt?: string;
+	messages: Message[];
+	tools?: Tool[];
+}
+```
+
+`Tool` parameter schemas are written with
+[TypeBox](20-glossary.qmd#sec:glossary) (`TSchema`), which keeps them JSON
+Schema-compatible for every provider adapter.
+
+::: {.callout-note}
+## Data, not classes
+None of the message formats are classes. `SessionEntry`, `AgentMessage`,
+`Message`, `Context`, and `AssistantMessageEvent` are plain-object interfaces
+and type unions — data with no methods. You construct them as object literals
+(or with small factories such as `createCompactionSummaryMessage()`), you can
+`JSON.stringify` them as-is, and tests build them as fixtures without
+instantiating machinery. The only runtime classes in this story are three:
+`SessionManager` owns the file, `Agent` owns the running loop, and
+`AssistantMessageEventStream` carries the response. There is no `Message`
+class to instantiate or subclass.
+:::
+
+### The same message in three shapes {#sec:three-shapes}
+
+To see the first two boundaries concretely, here is our example prompt in
+its three shapes so far — three of the six representations from [Six
+representations, one conversation](#sec:six-representations):
+`SessionEntry`, `AgentMessage`, and `Message` sitting inside a `Context`. On
+disk, the user message is one line in the session file, wrapped in its entry
+envelope (shown pretty-printed; real lines have no whitespace):
+
+```json
+{
+  "type": "message",
+  "id": "3f9a1c82",
+  "parentId": "e17b04d6",
+  "timestamp": "2025-07-13T15:22:11.421Z",
+  "message": {
+    "role": "user",
+    "content": "Read README.md and summarize it in one sentence.",
+    "timestamp": 1752420131000
+  }
+}
+```
+
+Note the two timestamps with two different jobs: the envelope's ISO string
+is when the line was appended (durability), the message's Unix milliseconds
+are when the message was created. On a fresh session, Pi creates the file
+only when the first assistant message lands — so the header, this line, and
+the first assistant line appear together; from then on, and on resumed
+sessions, every line is appended as it happens.
+
+After `buildSessionContext()` (Boundary 1), the envelope is gone and the
+inner object joins the runtime transcript as an `AgentMessage`:
+
+```json
+{
+  "role": "user",
+  "content": "Read README.md and summarize it in one sentence.",
+  "timestamp": 1752420131000
+}
+```
+
+After `convertToLlm()` (Boundary 2) and request assembly, the same message
+sits inside a `Context` as a canonical `UserMessage` — structurally
+unchanged, because user messages are already canonical:
+
+```json
+{
+  "systemPrompt": "You are an expert coding assistant ...",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Read README.md and summarize it in one sentence.",
+      "timestamp": 1752420131000
+    }
+  ],
+  "tools": [ "..." ]
+}
+```
+
+Spot the difference across the three shapes: the payload never changes, only
+the wrapping. The entry adds tree links and an ISO timestamp for durability;
+the runtime and canonical shapes keep only what a model request needs.
+
+### Boundary 3 — `Message` → `Message`, normalized {#sec:boundary-3}
+
 **Boundary 3 of 6 — `Message[]` → `Message[]`, normalized for the target
 model** (edge 3 in @fig-type-chain).
 *Type chain:* `SessionEntry` → `AgentMessage` → `Message` → **`Context` →
 wire payload** → `AssistantMessageEvent` → (back to) `SessionEntry`.
 
 ```ts
-transformMessages(messages, model, normalizeToolCallId?): Message[]
+export function transformMessages<TApi extends Api>(
+	messages: Message[],
+	model: Model<TApi>,
+	normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
+): Message[];
 ```
 
 In `packages/ai/src/api/transform-messages.ts`.
 **Adds:** target-model fixups (IDs, images, thinking).
 **Leaves behind:** errored turns, cross-model thinking.
 
-Every adapter under `packages/ai/src/api/` first calls `transformMessages()`,
-passing the messages, the target model, and a tool-call-ID normalizer. The
-why: some fixups depend on the *target* model, not the source — and every
-adapter needs the same ones. Doing them once, in a shared provider-neutral
-pass, means a new adapter gets them for free:
+Every chat adapter under `packages/ai/src/api/` — except `pi-messages.ts`,
+which speaks Pi's own message protocol and sends the canonical `Context`
+untransformed — first calls `transformMessages()`, passing the messages, the
+target model, and a tool-call-ID normalizer (five adapters reach it through
+shared helpers). The why: some fixups depend on the *target* model, not the
+source — and every adapter needs the same ones. Doing them once, in a shared
+provider-neutral pass, means a new adapter gets them for free:
 
 - Normalizes tool-call IDs when history crosses models (e.g. 450+-character
   OpenAI Responses IDs containing `|` into Anthropic's `^[a-zA-Z0-9_-]+$`
   shape with a 64-character limit), remapping matching `toolCallId`s on
-  results.
+  results. (OpenAI's completions adapter uses its own 40-character scheme
+  with a hash fallback.)
 - Replaces images with a text placeholder when the target model has no
   vision input.
 - Replays thinking blocks only for the same model that produced them;
@@ -775,25 +767,26 @@ after
   toolResult:  toolCallId: "fc_0c82…_call_7c1d…"   (remapped to match)
 ```
 
+### Boundary 4 — `Message` → wire payload {#sec:boundary-4}
+
 **Boundary 4 of 6 — `Message[]` → provider JSON** (edge 4 in
 @fig-type-chain).
 *Type chain:* `SessionEntry` → `AgentMessage` → `Message` → **`Context` →
 wire payload** → `AssistantMessageEvent` → (back to) `SessionEntry`.
 
-`convertMessages(transformedMessages, ...)` — one per adapter, in
-`packages/ai/src/api/` (e.g. `anthropic-messages.ts`,
-`openai-completions.ts`).
+`convertMessages(transformedMessages, ...)` — one per adapter, private to
+its file in `packages/ai/src/api/` (e.g. `anthropic-messages.ts`,
+`openai-completions.ts`), with no common signature.
 **Adds:** provider roles, field names, encodings.
 **Leaves behind:** the provider-neutral shape.
 
 The adapter's own `convertMessages()` turns the normalized `Message[]` into
-provider SDK types. This is where the
-canonical format's neutrality pays off: one tool-call exchange, two very
-different wire shapes.
+provider SDK types. This is where the canonical format's neutrality pays
+off: one tool-call exchange, two very different wire shapes.
 
-The blocks below zoom into messages 2 and 3 of that array — the tool call
-and its result — serialized three ways. Canonical form first (again with
-`api`, `provider`, `model`, `usage`, and `stopReason` omitted):
+The blocks below zoom into messages 2 and 3 of the canonical array — the
+tool call and its result — serialized three ways. Canonical form first
+(again with `api`, `provider`, `model`, `usage`, and `stopReason` omitted):
 
 ```json
 {
@@ -842,6 +835,9 @@ dedicated `role: "tool"` message keyed by `tool_call_id`:
 }
 ```
 
+(The assistant `content` is `null` by default; some provider compat profiles
+use an empty string instead.)
+
 `anthropic-messages.ts` serializes the same exchange as a `tool_use` content
 block (arguments as a structured `input` object), with the result moved into
 a **`tool_result` block inside a user-role message**:
@@ -864,25 +860,29 @@ a **`tool_result` block inside a user-role message**:
     {
       "type": "tool_result",
       "tool_use_id": "call_1",
-      "content": [{ "type": "text", "text": "# Pi\n..." }],
+      "content": "# Pi\n...",
       "is_error": false
     }
   ]
 }
 ```
 
+(The `tool_result` content is a plain string for text-only results; it
+becomes a block array when images are present.)
+
 Put the two side by side and the adapter's job is exact: arguments as string
 vs. object, a `tool` role vs. a `user`-wrapped block, `tool_call_id` vs.
 `tool_use_id` — three structural differences absorbed entirely by the
 adapter. Nothing above `Context` changes, and the session file keeps the
-single canonical form regardless of which model is active; [Models,
-providers, and
+single canonical form regardless of which model is active. Remember the
+question parked at the end of the homes section — this side by side is the
+evidence; [Models, providers, and
 authentication](12-models-providers-and-auth.qmd#sec:models) covers how the
 adapter itself is selected.
 
-## From provider response to session entry {#sec:wire-to-session}
+## Inbound: from the provider back to disk
 
-The inbound direction mirrors the outbound one — two more boundaries:
+### Boundary 5 — provider chunks → `AssistantMessageEvent` {#sec:boundary-5}
 
 **Boundary 5 of 6 — provider chunks → `AssistantMessageEvent`** (edge 5 in
 @fig-type-chain).
@@ -895,99 +895,319 @@ and its siblings — pushing onto an `AssistantMessageEventStream`
 **Adds:** normalized events, the final `AssistantMessage`.
 **Leaves behind:** the provider chunk format.
 
-1. **Adapter translation.** The adapter consumes the provider's stream (SSE
-   chunks or WebSocket frames) and pushes normalized
-   `AssistantMessageEvent`s — `start`, then
-   `text_delta`/`thinking_delta`/`toolcall_delta` chunks, `toolcall_end`,
-   and finally `done` or `error`. Each event carries the growing `partial`
-   assistant message, so consumers never parse provider JSON. What the
-   adapter absorbs is concrete — Anthropic streams this chunk (one SSE
-   event, pretty-printed):
+**Adapter translation.** The adapter consumes the provider's stream (SSE
+chunks or WebSocket frames) and pushes normalized `AssistantMessageEvent`s.
+The union has twelve variants — one per content-block transition, plus the
+two terminal events (`ai/src/types.ts`):
 
-   ```json
-   {
-     "type": "content_block_delta",
-     "index": 0,
-     "delta": { "type": "text_delta", "text": "README.md introduces" }
-   }
-   ```
+```ts
+export type AssistantMessageEvent =
+	| { type: "start"; partial: AssistantMessage }
+	| { type: "text_start"; contentIndex: number; partial: AssistantMessage }
+	| { type: "text_delta"; contentIndex: number; delta: string;
+	    partial: AssistantMessage }
+	| { type: "text_end"; contentIndex: number; content: string;
+	    partial: AssistantMessage }
+	| { type: "thinking_start"; contentIndex: number; partial: AssistantMessage }
+	| { type: "thinking_delta"; contentIndex: number; delta: string;
+	    partial: AssistantMessage }
+	| { type: "thinking_end"; contentIndex: number; content: string;
+	    partial: AssistantMessage }
+	| { type: "toolcall_start"; contentIndex: number; partial: AssistantMessage }
+	| { type: "toolcall_delta"; contentIndex: number; delta: string;
+	    partial: AssistantMessage }
+	| { type: "toolcall_end"; contentIndex: number; toolCall: ToolCall;
+	    partial: AssistantMessage }
+	| { type: "done"; reason: Extract<StopReason, "stop" | "length" | "toolUse">;
+	    message: AssistantMessage }
+	| { type: "error"; reason: Extract<StopReason, "aborted" | "error">;
+	    error: AssistantMessage };
+```
 
-   and pushes this normalized event instead — provider nesting gone, field
-   names canonical:
+Read the shape of a turn off the union: `start`, then per content block a
+`*_start`, `*_delta` chunks, a `*_end`, and finally `done` or `error`. The
+start and delta events carry the growing `partial` assistant message, so
+consumers never parse provider JSON; the terminal events carry the finished
+thing instead — `done` carries the final `message`, `error` carries the
+failed message as `error`. Note the `reason` types: a `done` reason is only
+ever `stop`, `length`, or `toolUse`; an `error` reason is `aborted` or
+`error`.
 
-   ```json
-   { "type": "text_delta", "contentIndex": 0,
-     "delta": "README.md introduces", "partial": "..." }
-   ```
+What the adapter absorbs is concrete — Anthropic streams this chunk (one SSE
+event, pretty-printed):
 
-   For the summary answer in our example, the full stream looks like this
-   (`partial` and the final `message` are full assistant-message objects,
-   trimmed here):
+```json
+{
+  "type": "content_block_delta",
+  "index": 0,
+  "delta": { "type": "text_delta", "text": "README.md introduces" }
+}
+```
 
-   ```json
-   { "type": "text_delta", "contentIndex": 0,
-     "delta": "README.md introduces", "partial": "..." }
-   { "type": "text_delta", "contentIndex": 0,
-     "delta": " the Pi ...", "partial": "..." }
-   { "type": "done", "reason": "stop", "message": "..." }
-   ```
-2. **The event stream.** `AssistantMessageEventStream`
-   (`packages/ai/src/utils/event-stream.ts`) is the one runtime class on this
-   path: an async-iterable queue of `AssistantMessageEvent`s whose `result()`
-   promise resolves to the final `AssistantMessage` — the `message` of a
-   `done` event or the `error` of an `error` event. The stream contract
-   forbids throwing: failures arrive as an `error` event carrying an
-   assistant message with `stopReason: "error"` (or `"aborted"`) and
-   `errorMessage` set. The why: if errors are data, every consumer — the
-   loop, the UI, persistence — handles success and failure through the same
-   code path, and no stack unwinding can lose a half-finished turn.
-3. **Agent events.** The loop in `packages/agent` iterates the stream with
-   `for await` and re-emits `message_start`, `message_update` (carrying the
-   `assistantMessageEvent`), and `message_end`, then appends the finished
-   `AssistantMessage` to its state. See [Prompt
-   lifecycle](07-lifecycle-and-hooks.qmd#sec:prompt-lifecycle) and [Agent
-   core](13-agent-core.qmd#sec:agent-core) for the full event ordering.
-4. **Persistence.** **Boundary 6 of 6 — `AgentMessage` → `SessionEntry`**
-   (edge 6 in @fig-type-chain).
-   *Type chain:* `SessionEntry` → `AgentMessage` → `Message` → `Context` →
-   wire payload → `AssistantMessageEvent` → **back to `SessionEntry`**.
+and pushes this normalized event instead — provider nesting gone, field
+names canonical:
 
-   `SessionManager.appendMessage()` —
-   `packages/coding-agent/src/core/session-manager.ts`.
-   **Adds:** the `id` / `parentId` / `timestamp` envelope.
-   **Leaves behind:** nothing — the full record is kept.
+```json
+{ "type": "text_delta", "contentIndex": 0,
+  "delta": "README.md introduces", "partial": "..." }
+```
 
-   `AgentSession` handles `message_end` (in `core/agent-session.ts`):
-   ordinary messages go to `SessionManager.appendMessage()`,
-   extension-injected custom messages to `appendCustomMessageEntry()`.
-   Either way a new JSONL line is appended as a child of the current leaf.
-   The finished turn closes the loop on disk — the summary message from our
-   running example lands with the same envelope shape you saw on the way in
-   (`api`, `provider`, `model`, and `usage` omitted as before):
+For the summary answer in our example, the full stream looks like this
+(`partial` and the final `message` are full assistant-message objects,
+trimmed here):
 
-   ```json
-   {
-     "type": "message",
-     "id": "a42d91f0",
-     "parentId": "5b6c7d8e",
-     "timestamp": "2026-07-30T14:02:19.004Z",
-     "message": {
-       "role": "assistant",
-       "content": [
-         { "type": "text", "text": "README.md introduces the Pi ..." }
-       ],
-       "stopReason": "stop",
-       "timestamp": 1752420139000
-     }
-   }
-   ```
+```json
+{ "type": "text_start", "contentIndex": 0, "partial": "..." }
+{ "type": "text_delta", "contentIndex": 0,
+  "delta": "README.md introduces", "partial": "..." }
+{ "type": "text_delta", "contentIndex": 0,
+  "delta": " the Pi ...", "partial": "..." }
+{ "type": "text_end", "contentIndex": 0,
+  "content": "README.md introduces the Pi ...", "partial": "..." }
+{ "type": "done", "reason": "stop", "message": "..." }
+```
 
-   Note that even a failed turn's assistant message is persisted (its
-   `errorMessage` is part of the record); `transformMessages()` skips it
-   when building the *next* request, so the model retries from the last
-   valid state while the file keeps a complete audit trail. One
-   conversation, back in its durable home — ready to be rebuilt into the
-   next request.
+**The event stream.** `AssistantMessageEventStream` is the one runtime class
+on this path — an async-iterable queue whose `result()` promise resolves to
+the final `AssistantMessage` (public surface, bodies elided):
+
+```ts
+export class AssistantMessageEventStream
+    extends EventStream<AssistantMessageEvent, AssistantMessage> {
+	push(event: AssistantMessageEvent): void;   // deliver; done/error also resolve result()
+	end(result?: AssistantMessage): void;       // close the stream
+	[Symbol.asyncIterator](): AsyncIterator<AssistantMessageEvent>;
+	result(): Promise<AssistantMessage>;        // done → event.message; error → event.error
+}
+```
+
+The stream contract forbids throwing: failures arrive as an `error` event
+carrying an assistant message with `stopReason: "error"` (or `"aborted"`)
+and `errorMessage` set, and `result()` resolves — never rejects — with that
+message. The why: if errors are data, every consumer — the loop, the UI,
+persistence — handles success and failure through the same code path, and no
+stack unwinding can lose a half-finished turn.
+
+**From stream events to loop events.** Events in Pi exist at two levels.
+Inside `packages/ai`, the stream speaks `AssistantMessageEvent` — one per
+provider chunk. The agent loop translates those into `AgentEvent`s — the
+lifecycle that extensions and the UI subscribe to. `message_update` is the
+bridge: it wraps each stream event. The loop iterates the stream with
+`for await` and re-emits the union's three nested lifecycles plus tool
+execution (`packages/agent/src/types.ts`; the grouping comments are the
+source's own):
+
+```ts
+export type AgentEvent =
+	// Agent lifecycle
+	| { type: "agent_start" }
+	| { type: "agent_end"; messages: AgentMessage[] }
+	// Turn lifecycle - a turn is one assistant response + any tool calls/results
+	| { type: "turn_start" }
+	| { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[] }
+	// Message lifecycle - emitted for user, assistant, and toolResult messages
+	| { type: "message_start"; message: AgentMessage }
+	// Only emitted for assistant messages during streaming
+	| { type: "message_update"; message: AgentMessage;
+	    assistantMessageEvent: AssistantMessageEvent }
+	| { type: "message_end"; message: AgentMessage }
+	// Tool execution lifecycle
+	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
+	| { type: "tool_execution_update"; toolCallId: string; toolName: string;
+	    args: any; partialResult: any }
+	| { type: "tool_execution_end"; toolCallId: string; toolName: string;
+	    result: any; isError: boolean };
+```
+
+Two facts to read off the union: `message_start` and `message_end` fire for
+user, assistant, *and* toolResult messages, while `message_update` fires
+only during assistant streaming; and a **turn** is one assistant response
+plus any tool calls and results it triggered — so our README exchange is
+*two* turns, not one. For our exchange, the loop emits (an outline;
+`tool_execution_update` fires only if the tool streams partials, so it may
+not appear at all):
+
+```text
+agent_start
+turn_start                                            (first turn)
+  message_start / message_end    (your prompt)
+  message_start                  (assistant, on stream start)
+  message_update × N             (each wraps an assistantMessageEvent)
+  message_end                    (the tool-call message)
+  tool_execution_start → tool_execution_end      (read call_1)
+  message_start / message_end    (the toolResult)
+turn_end   { message: tool-call message, toolResults: [read result] }
+turn_start                                            (second turn)
+  message_start / message_update × N / message_end   (the summary)
+turn_end   { message: summary, toolResults: [] }
+agent_end  { messages: [prompt, tool-call msg, toolResult, summary] }
+```
+
+`turn_end` carries the turn's own assistant message and its tool results;
+`agent_end` carries everything this run added. And because failures arrive
+as data, the loop emits this full lifecycle even for error/aborted turns —
+one more reason persistence can hang off `message_end` alone. See [Prompt
+lifecycle](07-lifecycle-and-hooks.qmd#sec:prompt-lifecycle) and [Agent
+core](13-agent-core.qmd#sec:agent-core) for the full event ordering.
+
+### Boundary 6 — `AgentMessage` → `SessionEntry` {#sec:boundary-6}
+
+**Boundary 6 of 6 — `AgentMessage` → `SessionEntry`** (edge 6 in
+@fig-type-chain).
+*Type chain:* `SessionEntry` → `AgentMessage` → `Message` → `Context` →
+wire payload → `AssistantMessageEvent` → **back to `SessionEntry`**.
+
+`message_end` — the lifecycle event from Boundary 5 — is the persistence
+trigger. `AgentSession` handles it (in `core/agent-session.ts`): ordinary
+messages go to `SessionManager.appendMessage()`, extension-injected custom
+messages to `appendCustomMessageEntry()`. Either way a new JSONL line is
+appended as a child of the current leaf:
+
+```ts
+/** Append a message as child of current leaf, then advance leaf. Returns entry id.
+ * Does not allow writing CompactionSummaryMessage and BranchSummaryMessage directly.
+ * Reason: we want these to be top-level entries in the session, not message session entries,
+ * so it is easier to find them.
+ * These need to be appended via appendCompaction() and appendBranchSummary() methods.
+ */
+appendMessage(message: Message | CustomMessage | BashExecutionMessage): string;
+```
+
+`packages/coding-agent/src/core/session-manager.ts`.
+**Adds:** the `id` / `parentId` / `timestamp` envelope.
+**Leaves behind:** nothing — the full record is kept.
+
+The finished exchange closes the loop on disk — the summary message from our
+running example lands with the same envelope shape you saw in [The same
+message in three shapes](#sec:three-shapes) (`api`, `provider`, `model`, and
+`usage` omitted as before; the `parentId` is the tool-result entry's id):
+
+```json
+{
+  "type": "message",
+  "id": "a42d91f0",
+  "parentId": "5b6c7d8e",
+  "timestamp": "2025-07-13T15:22:19.004Z",
+  "message": {
+    "role": "assistant",
+    "content": [
+      { "type": "text", "text": "README.md introduces the Pi ..." }
+    ],
+    "stopReason": "stop",
+    "timestamp": 1752420139000
+  }
+}
+```
+
+Even a failed turn's assistant message is persisted (its `errorMessage` is
+part of the record): failures are stream data, so the loop emits the full
+`message_start`/`message_end` lifecycle for an error or aborted turn, and
+the same `appendMessage()` path runs. `transformMessages()` then skips that
+message when building the *next* request, so the model retries from the last
+valid state while the file keeps a complete audit trail. One conversation,
+back in its durable home — ready to be rebuilt into the next request.
+
+## Why Pi has its own message representation {#sec:why-canonical}
+
+This section answers question 1 from the intro.
+
+::: {.callout-note}
+## Skippable
+This section explains why Pi owns a message format at all; the walk stands
+alone without it. If you want the whole round trip in one picture first,
+skip ahead to [The pipeline in one picture](#sec:pipeline-recap).
+:::
+
+You have now seen the two wire shapes at Boundary 4. So why doesn't Pi just
+pick one — keep a provider's shape in its own three homes and pass it
+straight through? Four reasons explain the architecture.
+
+### Providers disagree about the basics
+
+There is no standard for how a conversation is encoded. Two providers Pi
+supports — chosen because they are the most common — already differ on the
+fundamentals (you saw every row of this table at Boundary 4):
+
+| Design question | OpenAI (Chat Completions) | Anthropic (Messages) |
+|---|---|---|
+| Tool-call arguments | JSON **string**, must be parsed | Structured `input` **object** |
+| Tool result's role | Dedicated `tool` role | A `tool_result` block inside a **`user`** message |
+| Result's key field | `tool_call_id` | `tool_use_id` |
+| Streaming | Delta objects per chunk | Typed content-block events |
+| Reasoning output | Model-specific fields | Signed `thinking` blocks |
+
+If Pi's session file or agent loop spoke one provider's dialect, switching
+models mid-session would corrupt the transcript — and Pi explicitly allows
+switching (`/model`, and `model_change` entries in the session file). A
+history stored as Anthropic `tool_use` blocks cannot be sent to OpenAI
+as-is; a history stored as OpenAI `tool` messages cannot be sent to
+Anthropic. Something in the middle must keep the conversation neutral.
+
+### One hub, not a translator per pair
+
+Pi supports ten chat provider APIs plus an image-generation API — one
+adapter file each under `packages/ai/src/api/` — and dozens of provider
+brands share those adapters. With a canonical hub format, adding a provider
+means writing **one adapter**: canonical messages to wire JSON on the way
+out, wire chunks to canonical events on the way in. Without the hub, every
+feature that produces or consumes messages — the session store, compaction,
+extension-injected messages, the TUI — would need its own converter per
+provider. The hub turns an N×M problem — every feature that produces or
+consumes messages, times every provider — into an N problem.
+
+### The session file outlives provider APIs
+
+A session file is a long-lived artifact: you can `/resume` a conversation
+next week, branch it with `/tree` next month. Provider APIs, meanwhile,
+version and deprecate constantly. If the durable record were provider JSON,
+every provider migration would threaten every saved session. Keeping the
+file in Pi's own format means provider changes are absorbed by one adapter
+file, never by migrating your history.
+
+### Each boundary drops information on purpose
+
+The corollary of layered representations is that each conversion is
+**one-directional and lossy by design**. Durable-only fields — extension
+state, labels, thinking-level changes — never reach the provider, so they
+never cost tokens or leak into someone else's logs. Provider quirks — ID
+formats, role constraints — never leak back into the session file, so the
+file stays valid for whichever model handles the next turn.
+
+## The pipeline in one picture {#sec:pipeline-recap}
+
+You have walked every boundary; @fig-representation-pipeline compresses the
+round trip into one diagram. Trace each arrow against the boundary you just
+read: follow the arrows left to right on the way out, right to left on the
+way back. It is the process view of @fig-type-chain — same boundaries, same
+functions, shown as participants exchanging messages rather than types
+linked by edges.
+
+```{mermaid}
+%%| label: fig-representation-pipeline
+%%| fig-cap: "One prompt's round trip through the representation pipeline. Outbound arrows (top) name the exact converting function; inbound arrows (bottom) carry the streamed response back to the session file. parseSessionEntries() is exported for compaction tests; the runtime load path is loadEntriesFromFile()."
+%%| fig-width: 6.2
+%%| fig-pos: "H"
+sequenceDiagram
+  participant F as session file<br/>(JSONL)
+  participant S as SessionManager
+  participant A as agent loop
+  participant D as ai adapter
+  participant P as provider
+  F->>S: parseSessionEntries() → FileEntry[]
+  S->>A: buildSessionContext() → AgentMessage[]
+  A->>D: convertToLlm() → Context
+  D->>D: transformMessages()
+  D->>P: convertMessages() → provider JSON
+  P->>D: SSE chunks → AssistantMessageEvent
+  D->>A: stream done → AssistantMessage
+  A->>S: message_end
+  S->>F: appendMessage() → new JSONL line
+```
+
+Two labels deserve a gloss. A `FileEntry` is simply one file line: the
+header or one `SessionEntry` — `parseSessionEntries()` returns `FileEntry[]`
+because it reads the header too. And SSE is Server-Sent Events, the HTTP
+convention of streaming a response as a series of text chunks.
 
 ## Choosing the right boundary {#sec:choose-boundary}
 
